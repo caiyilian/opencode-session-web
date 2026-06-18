@@ -330,7 +330,8 @@ async function sendMessage() {
   messagesArea.innerHTML += `<div class="msg assistant streaming" id="${streamId}">
     <div class="msg-avatar">AI</div>
     <div class="msg-body">
-      <div class="role-label">AI · 思考中...</div>
+      <div class="role-label" id="${streamId}_label">AI · 思考中...</div>
+      <div class="tools-inline" id="${streamId}_tools"></div>
       <div class="thinking-content" id="${streamId}_thinking"></div>
       <div class="content" id="${streamId}_text"></div>
       <div class="loading" id="${streamId}_loading" style="padding:10px"><div class="spinner"></div></div>
@@ -359,6 +360,33 @@ async function sendMessage() {
       el.textContent += e.data.replace(/\\n/g, '\n');
       messagesArea.scrollTop = messagesArea.scrollHeight;
     }
+  });
+
+  // Real-time tool use display
+  eventSource.addEventListener('tool_use', (e) => {
+    const toolsEl = document.getElementById(streamId + '_tools');
+    const labelEl = document.getElementById(streamId + '_label');
+    if (toolsEl) {
+      try {
+        const info = JSON.parse(e.data);
+        const toolSpan = document.createElement('span');
+        toolSpan.className = 'tool-chip';
+        toolSpan.textContent = '🔧 ' + info.tool + (info.input ? ': ' + info.input.slice(0, 60) : '');
+        toolsEl.appendChild(toolSpan);
+        messagesArea.scrollTop = messagesArea.scrollHeight;
+      } catch (_) {}
+    }
+    if (labelEl) labelEl.textContent = 'AI · 使用工具...';
+  });
+
+  eventSource.addEventListener('tool_result', (e) => {
+    const labelEl = document.getElementById(streamId + '_label');
+    if (labelEl) labelEl.textContent = 'AI · 处理工具结果...';
+  });
+
+  eventSource.addEventListener('status', (e) => {
+    const labelEl = document.getElementById(streamId + '_label');
+    if (labelEl && e.data === 'step_start') labelEl.textContent = 'AI · 思考中...';
   });
 
   eventSource.addEventListener('done', (e) => {
@@ -542,6 +570,25 @@ function startNewSession() {
             el.textContent += data.replace(/\\n/g, '\n');
             messagesArea.scrollTop = messagesArea.scrollHeight;
           }
+        } else if (eventType === 'tool_use') {
+          const toolsEl = document.getElementById(streamId + '_tools');
+          const labelEl = document.getElementById(streamId + '_label');
+          if (toolsEl) {
+            try {
+              const info = JSON.parse(data);
+              const chip = document.createElement('span');
+              chip.className = 'tool-chip';
+              chip.textContent = '🔧 ' + info.tool + (info.input ? ': ' + info.input.slice(0, 60) : '');
+              toolsEl.appendChild(chip);
+            } catch (_) {}
+          }
+          if (labelEl) labelEl.textContent = 'AI · 使用工具...';
+        } else if (eventType === 'tool_result') {
+          const labelEl = document.getElementById(streamId + '_label');
+          if (labelEl) labelEl.textContent = 'AI · 处理工具结果...';
+        } else if (eventType === 'status') {
+          const labelEl = document.getElementById(streamId + '_label');
+          if (labelEl && data === 'step_start') labelEl.textContent = 'AI · 思考中...';
         } else if (eventType === 'done') {
           const info = JSON.parse(data || '{}');
           const newId = info.session_id;
@@ -908,6 +955,25 @@ async function forkSession() {
         } else if (eventType === 'text') {
           const el = document.getElementById(streamId + '_text');
           if (el) el.textContent += data.replace(/\\n/g, '\n');
+        } else if (eventType === 'tool_use') {
+          const toolsEl = document.getElementById(streamId + '_tools');
+          const labelEl = document.getElementById(streamId + '_label');
+          if (toolsEl) {
+            try {
+              const info = JSON.parse(data);
+              const chip = document.createElement('span');
+              chip.className = 'tool-chip';
+              chip.textContent = '🔧 ' + info.tool + (info.input ? ': ' + info.input.slice(0, 60) : '');
+              toolsEl.appendChild(chip);
+            } catch (_) {}
+          }
+          if (labelEl) labelEl.textContent = 'AI · 使用工具...';
+        } else if (eventType === 'tool_result') {
+          const labelEl = document.getElementById(streamId + '_label');
+          if (labelEl) labelEl.textContent = 'AI · 处理工具结果...';
+        } else if (eventType === 'status') {
+          const labelEl = document.getElementById(streamId + '_label');
+          if (labelEl && data === 'step_start') labelEl.textContent = 'AI · 思考中...';
         } else if (eventType === 'done') {
           const info = JSON.parse(data || '{}');
           newId = info.session_id;

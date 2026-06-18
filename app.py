@@ -571,6 +571,20 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                         safe_text = text.replace("\n", "\\n")
                         yield f"event: thinking\ndata: {safe_text}\n\n"
 
+                elif event_type == "tool_use" or part.get("type") == "tool":
+                    tool_name = part.get("tool", event.get("tool", ""))
+                    tool_input = part.get("input", "") or part.get("arguments", "") or ""
+                    info = json.dumps({"tool": tool_name, "input": str(tool_input)[:200]})
+                    yield f"event: tool_use\ndata: {info}\n\n"
+
+                elif event_type == "tool_result" or part.get("type") == "tool_result":
+                    tname = part.get("tool_name", "")
+                    status = part.get("status", "done")
+                    yield f"event: tool_result\ndata: {json.dumps({'tool': tname, 'status': status})}\n\n"
+
+                elif event_type == "step_start":
+                    yield "event: status\ndata: step_start\n\n"
+
                 elif event_type == "step_finish":
                     tokens = part.get("tokens", {})
                     yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
@@ -730,6 +744,15 @@ def api_session_new():
                         if txt:
                             safe = txt.replace("\n", "\\n")
                             yield f"event: thinking\ndata: {safe}\n\n"
+                    elif ev_type == "tool_use" or part.get("type") == "tool":
+                        tname = part.get("tool", ev.get("tool", ""))
+                        tinp = part.get("input", "") or part.get("arguments", "") or ""
+                        yield f"event: tool_use\ndata: {json.dumps({'tool': tname, 'input': str(tinp)[:200]})}\n\n"
+                    elif ev_type == "tool_result" or part.get("type") == "tool_result":
+                        tname = part.get("tool_name", "")
+                        yield f"event: tool_result\ndata: {json.dumps({'tool': tname, 'status': 'done'})}\n\n"
+                    elif ev_type == "step_start":
+                        yield "event: status\ndata: step_start\n\n"
                     elif ev_type == "step_finish":
                         tokens = part.get("tokens", {})
                         yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
@@ -947,6 +970,22 @@ def api_session_fork(session_id):
                         txt = part.get("text", ev.get("text", ""))
                         if txt:
                             yield f"event: thinking\ndata: {txt.replace(chr(10), '\\n')}\n\n"
+                    elif ev_type == "tool_use" or part.get("type") == "tool":
+                        tname = part.get("tool", ev.get("tool", ""))
+                        tinp = part.get("input", "") or part.get("arguments", "") or ""
+                        yield f"event: tool_use\ndata: {json.dumps({'tool': tname, 'input': str(tinp)[:200]})}\n\n"
+                    elif ev_type == "tool_result" or part.get("type") == "tool_result":
+                        tname = part.get("tool_name", "")
+                        yield f"event: tool_result\ndata: {json.dumps({'tool': tname, 'status': 'done'})}\n\n"
+                    elif ev_type == "step_start":
+                        yield "event: status\ndata: step_start\n\n"
+                    elif ev_type == "step_finish":
+                        tokens = part.get("tokens", {})
+                        yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
+                        tname = part.get("tool_name", "")
+                        yield f"event: tool_result\ndata: {json.dumps({'tool': tname, 'status': 'done'})}\n\n"
+                    elif ev_type == "step_start":
+                        yield "event: status\ndata: step_start\n\n"
                     elif ev_type == "step_finish":
                         tokens = part.get("tokens", {})
                         yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"

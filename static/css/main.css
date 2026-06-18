@@ -132,6 +132,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
                                     padding: 8px 12px; background: var(--bg3);
                                     border-radius: var(--radius); margin-bottom: 8px;
                                     white-space: pre-wrap; word-break: break-word; }
+
+/* ── Real-time tool chips ── */
+.tools-inline { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.tool-chip { font-size: 11px; padding: 2px 8px; border-radius: 12px;
+             background: #6a1b9a30; border: 1px solid #6a1b9a60;
+             color: #ce93d8; white-space: nowrap; overflow: hidden;
+             text-overflow: ellipsis; max-width: 280px;
+             animation: toolPulse 1.5s ease-in-out infinite; }
+@keyframes toolPulse { 0%, 100% { opacity: .7; } 50% { opacity: 1; } }
 .thinking-label { font-size: 11px; color: var(--accent3); margin-bottom: 4px;
                   text-transform: uppercase; letter-spacing: .5px; }
 
