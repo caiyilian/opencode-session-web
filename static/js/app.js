@@ -18,6 +18,35 @@ async function api(path) {
   return res.json();
 }
 
+// ── Markdown rendering ──
+
+// Configure marked with highlight.js
+if (typeof marked !== 'undefined' && typeof hljs !== 'undefined') {
+  marked.setOptions({
+    breaks: true,
+    gfm: true,
+    highlight: function(code, lang) {
+      if (lang && hljs.getLanguage(lang)) {
+        try { return hljs.highlight(code, { language: lang }).value; } catch (e) {}
+      }
+      return code;
+    }
+  });
+}
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  if (typeof marked !== 'undefined') {
+    try {
+      return marked.parse(text);
+    } catch (e) {
+      return escHtml(text);
+    }
+  }
+  // Fallback: escape HTML and preserve newlines
+  return escHtml(text).replace(/\n/g, '<br>');
+}
+
 // ── Sidebar ──
 function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
@@ -225,7 +254,7 @@ async function openSession(id) {
       <div class="msg-avatar">${avatar}</div>
       <div class="msg-body">
         <div class="role-label">${label} · ${m.time_created}</div>
-        <div class="content">${escHtml(m.content) || '(空)'}</div>
+        <div class="content md-content">${renderMarkdown(m.content) || '(空)'}</div>
         ${metaLine}
       </div>
     </div>`;
@@ -292,7 +321,7 @@ async function sendMessage() {
     <div class="msg-avatar">U</div>
     <div class="msg-body">
       <div class="role-label">你 · 刚刚</div>
-      <div class="content">${escHtml(text)}</div>
+      <div class="content md-content">${renderMarkdown(text)}</div>
     </div>
   </div>`;
 
@@ -335,8 +364,15 @@ async function sendMessage() {
   eventSource.addEventListener('done', (e) => {
     const loading = document.getElementById(streamId + '_loading');
     const msgEl = document.getElementById(streamId);
+    const textEl = document.getElementById(streamId + '_text');
     if (loading) loading.remove();
     if (msgEl) msgEl.classList.remove('streaming');
+    // Re-render accumulated text as markdown
+    if (textEl) {
+      const fullText = textEl.textContent;
+      textEl.innerHTML = renderMarkdown(fullText);
+      textEl.classList.add('md-content');
+    }
     eventSource.close();
     eventSource = null;
     // Re-enable input
@@ -447,7 +483,7 @@ function startNewSession() {
       <div class="msg-avatar">U</div>
       <div class="msg-body">
         <div class="role-label">你 · 刚刚</div>
-        <div class="content">${escHtml(message)}</div>
+        <div class="content md-content">${renderMarkdown(message)}</div>
       </div>
     </div>
     <div class="msg assistant streaming" id="${streamId}">
@@ -824,7 +860,7 @@ async function forkSession() {
     <div class="msg-avatar">U</div>
     <div class="msg-body">
       <div class="role-label">你 · 分叉点</div>
-      <div class="content">${escHtml(message)}</div>
+      <div class="content md-content">${renderMarkdown(message)}</div>
     </div>
   </div>
   <div class="msg assistant streaming" id="${streamId}">
@@ -990,7 +1026,7 @@ function renderCompareView(s1, s2) {
         const roleLabel = msg.role === 'user' ? '你' : msg.role === 'assistant' ? 'AI' : '工具';
         html += `<div class="compare-msg ${msg.role}">
           <div class="role-label">${roleLabel}</div>
-          <div class="content">${escHtml(msg.content) || '(空)'}</div>
+          <div class="content md-content">${renderMarkdown(msg.content) || '(空)'}</div>
         </div>`;
       } else {
         html += `<div class="compare-msg empty"></div>`;
