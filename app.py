@@ -276,14 +276,8 @@ def api_sessions_compare():
                 t = p.get("type", "")
                 if t == "text":
                     texts.append(p.get("text", ""))
-                elif t == "reasoning":
-                    rt = p.get("text", "")
-                    if rt:
-                        texts.append(f"[思考] {rt[:200]}")
                 elif t == "tool":
-                    texts.append(f"[工具] {p.get('tool', p.get('state', {}).get('status', ''))}")
-                elif t == "step-start":
-                    texts.append("---")
+                    texts.append(f"[工具] {p.get('tool', '')}")
                 elif t == "step-finish":
                     tokens_info = p.get("tokens", {})
                     if tokens_info:
@@ -292,6 +286,7 @@ def api_sessions_compare():
             msg_list.append({
                 "id": m["id"],
                 "role": m["role"],
+                "parts": m["parts"],
                 "content": content[:500],
                 "time": m["time"],
             })
@@ -382,34 +377,50 @@ def api_session_detail(session_id):
             except (json.JSONDecodeError, TypeError):
                 pass
 
-    # 将 parts 渲染为文本
+    # 将 parts 按类型传递给前端
     msg_list = []
     for mid in sorted(msg_map.keys(), key=lambda x: msg_map[x]["time_created_raw"]):
         m = msg_map[mid]
-        texts = []
+        parts_out = []
         for p in m["parts"]:
             t = p.get("type", "")
+            entry = {"type": t}
             if t == "text":
-                texts.append(p.get("text", ""))
+                entry["text"] = p.get("text", "")
             elif t == "reasoning":
-                reasoning_text = p.get("text", "")
-                if reasoning_text:
-                    texts.append(f"[思考] {reasoning_text[:200]}{'...' if len(reasoning_text) > 200 else ''}")
+                entry["text"] = p.get("text", "")
             elif t == "tool":
-                texts.append(f"[工具] {p.get('tool', p.get('state', {}).get('status', ''))}")
+                entry["tool"] = p.get("tool", "")
+                state = p.get("state", {})
+                sinp = state.get("input", {})
+                if isinstance(sinp, dict):
+                    # bash: {command, description}; glob: {pattern}; edit: {file_path, ...}
+                    cmd = sinp.get("command") or sinp.get("pattern") or sinp.get("file_path") or ""
+                    desc = sinp.get("description", "")
+                    entry["input"] = str(cmd)[:500]
+                    entry["description"] = str(desc)[:200]
+                else:
+                    entry["input"] = str(sinp)[:500]
+                    entry["description"] = ""
+                entry["output"] = state.get("output", "")[:2000]
+                entry["is_hidden"] = state.get("metadata", {}).get("truncated", False) if isinstance(state.get("metadata"), dict) else False
+            elif t == "tool_result":
+                entry["tool_name"] = p.get("tool_name", "")
+                entry["content"] = p.get("content", "")
+                entry["status"] = p.get("status", "success")
+                entry["is_hidden"] = p.get("is_hidden", False)
             elif t == "step-start":
-                texts.append("---")
+                pass
             elif t == "step-finish":
-                reason = p.get("reason", "")
-                tokens_info = p.get("tokens", {})
-                if tokens_info:
-                    texts.append(f"[步骤完成] {tokens_info.get('total', 0)} tokens")
-        content = "\n".join(texts) if texts else ""
+                entry["tokens"] = p.get("tokens", {})
+                entry["cost"] = p.get("cost", 0)
+                entry["reason"] = p.get("reason", "")
+            parts_out.append(entry)
 
         msg_list.append({
             "id": m["id"],
             "role": m["role"],
-            "content": content[:2000],
+            "parts": parts_out,
             "time_created": m["time_created"],
             "time_created_raw": m["time_created_raw"],
             "tokens": m["tokens"],
@@ -571,6 +582,20 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                         safe_text = text.replace("\n", "\\n")
                         yield f"event: thinking\ndata: {safe_text}\n\n"
 
+                elif event_type == "tool_use" or part.get("type") == "tool":
+                    tool_name = part.get("tool", event.get("tool", ""))
+                    tool_input = part.get("input", "") or part.get("arguments", "") or ""
+                    info = json.dumps({"tool": tool_name, "input": str(tool_input)[:200]})
+                    yield f"event: tool_use\ndata: {info}\n\n"
+
+                elif event_type == "tool_result" or part.get("type") == "tool_result":
+                    tname = part.get("tool_name", "")
+                    status = part.get("status", "done")
+                    yield f"event: tool_result\ndata: {json.dumps({'tool': tname, 'status': status})}\n\n"
+
+                elif event_type == "step_start":
+                    yield "event: status\ndata: step_start\n\n"
+
                 elif event_type == "step_finish":
                     tokens = part.get("tokens", {})
                     yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
@@ -730,6 +755,15 @@ def api_session_new():
                         if txt:
                             safe = txt.replace("\n", "\\n")
                             yield f"event: thinking\ndata: {safe}\n\n"
+                    elif ev_type == "tool_use" or part.get("type") == "tool":
+                        tname = part.get("tool", ev.get("tool", ""))
+                        tinp = part.get("input", "") or part.get("arguments", "") or ""
+                        yield f"event: tool_use\ndata: {json.dumps({'tool': tname, 'input': str(tinp)[:200]})}\n\n"
+                    elif ev_type == "tool_result" or part.get("type") == "tool_result":
+                        tname = part.get("tool_name", "")
+                        yield f"event: tool_result\ndata: {json.dumps({'tool': tname, 'status': 'done'})}\n\n"
+                    elif ev_type == "step_start":
+                        yield "event: status\ndata: step_start\n\n"
                     elif ev_type == "step_finish":
                         tokens = part.get("tokens", {})
                         yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
@@ -947,6 +981,22 @@ def api_session_fork(session_id):
                         txt = part.get("text", ev.get("text", ""))
                         if txt:
                             yield f"event: thinking\ndata: {txt.replace(chr(10), '\\n')}\n\n"
+                    elif ev_type == "tool_use" or part.get("type") == "tool":
+                        tname = part.get("tool", ev.get("tool", ""))
+                        tinp = part.get("input", "") or part.get("arguments", "") or ""
+                        yield f"event: tool_use\ndata: {json.dumps({'tool': tname, 'input': str(tinp)[:200]})}\n\n"
+                    elif ev_type == "tool_result" or part.get("type") == "tool_result":
+                        tname = part.get("tool_name", "")
+                        yield f"event: tool_result\ndata: {json.dumps({'tool': tname, 'status': 'done'})}\n\n"
+                    elif ev_type == "step_start":
+                        yield "event: status\ndata: step_start\n\n"
+                    elif ev_type == "step_finish":
+                        tokens = part.get("tokens", {})
+                        yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
+                        tname = part.get("tool_name", "")
+                        yield f"event: tool_result\ndata: {json.dumps({'tool': tname, 'status': 'done'})}\n\n"
+                    elif ev_type == "step_start":
+                        yield "event: status\ndata: step_start\n\n"
                     elif ev_type == "step_finish":
                         tokens = part.get("tokens", {})
                         yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
