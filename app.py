@@ -10,6 +10,7 @@ import subprocess
 import sqlite3
 import queue
 import threading
+import time
 from pathlib import Path
 from flask import Flask, jsonify, request, render_template, Response, stream_with_context
 
@@ -701,6 +702,72 @@ def api_files():
         return jsonify({"error": "无权限访问该目录"}), 403
     except OSError as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── Phase 3: 统计图表数据 ──────────────────────────────
+
+
+@app.route("/api/stats/tokens")
+def api_stats_tokens():
+    """Token 消耗统计（按天/模型/项目）"""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # 最近 30 天每日 Token
+    thirty_days_ago = (int(time.time()) - 30 * 86400) * 1000
+    daily = cursor.execute(
+        """SELECT DATE(time_created / 1000, 'unixepoch') as day,
+                  SUM(tokens_input) as inp,
+                  SUM(tokens_output) as out
+           FROM session
+           WHERE time_created > ?
+           GROUP BY day
+           ORDER BY day""",
+        (thirty_days_ago,),
+    ).fetchall()
+
+    # 按模型汇总
+    by_model = cursor.execute(
+        """SELECT model,
+                  SUM(tokens_input) as inp,
+                  SUM(tokens_output) as out,
+                  SUM(cost) as cst
+           FROM session
+           WHERE model IS NOT NULL AND model != ''
+           GROUP BY model
+           ORDER BY inp DESC
+           LIMIT 15""",
+    ).fetchall()
+
+    # 按项目汇总
+    by_project = cursor.execute(
+        """SELECT directory,
+                  SUM(tokens_input) as inp,
+                  SUM(tokens_output) as out,
+                  COUNT(*) as cnt
+           FROM session
+           GROUP BY directory
+           ORDER BY inp DESC
+           LIMIT 15""",
+    ).fetchall()
+
+    conn.close()
+
+    return jsonify({
+        "daily": [{"day": r["day"], "input": r["inp"] or 0, "output": r["out"] or 0} for r in daily],
+        "by_model": [{
+            "model": format_model(r["model"]),
+            "input": r["inp"] or 0,
+            "output": r["out"] or 0,
+            "cost": round(r["cst"] or 0, 6),
+        } for r in by_model],
+        "by_project": [{
+            "project": get_project_name(r["directory"]),
+            "input": r["inp"] or 0,
+            "output": r["out"] or 0,
+            "sessions": r["cnt"],
+        } for r in by_project],
+    })
 
 
 # ── 前端页面 ──────────────────────────────────────────────
