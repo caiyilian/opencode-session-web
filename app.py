@@ -10,6 +10,7 @@ import subprocess
 import sqlite3
 import queue
 import threading
+import time
 from pathlib import Path
 from flask import Flask, jsonify, request, render_template, Response, stream_with_context
 
@@ -218,6 +219,105 @@ def api_sessions():
         })
 
     return jsonify({"sessions": sessions, "total": total})
+
+
+# ── Phase 3: 会话对比 ──────────────────────────────────
+
+
+@app.route("/api/sessions/compare")
+def api_sessions_compare():
+    """对比两个会话的消息"""
+    id1 = request.args.get("id1", "").strip()
+    id2 = request.args.get("id2", "").strip()
+    if not id1 or not id2:
+        return jsonify({"error": "需要 id1 和 id2 参数"}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    def load_session(sid):
+        row = cursor.execute("SELECT * FROM session WHERE id = ?", (sid,)).fetchone()
+        if not row:
+            return None
+        s = dict(row)
+        msgs = cursor.execute(
+            """SELECT m.id, m.time_created, m.data,
+                      p.data as part_data
+               FROM message m
+               LEFT JOIN part p ON p.message_id = m.id
+               WHERE m.session_id = ?
+               ORDER BY m.time_created ASC, p.id ASC""",
+            (sid,),
+        ).fetchall()
+        msg_map = {}
+        for m in msgs:
+            mid = m["id"]
+            if mid not in msg_map:
+                try:
+                    d = json.loads(m["data"])
+                except (json.JSONDecodeError, TypeError):
+                    d = {}
+                msg_map[mid] = {
+                    "id": mid,
+                    "role": d.get("role", "unknown"),
+                    "time": m["time_created"],
+                    "parts": [],
+                }
+            if m["part_data"]:
+                try:
+                    msg_map[mid]["parts"].append(json.loads(m["part_data"]))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        msg_list = []
+        for mid in sorted(msg_map, key=lambda x: msg_map[x]["time"]):
+            m = msg_map[mid]
+            texts = []
+            for p in m["parts"]:
+                t = p.get("type", "")
+                if t == "text":
+                    texts.append(p.get("text", ""))
+                elif t == "reasoning":
+                    rt = p.get("text", "")
+                    if rt:
+                        texts.append(f"[思考] {rt[:200]}")
+                elif t == "tool":
+                    texts.append(f"[工具] {p.get('tool', p.get('state', {}).get('status', ''))}")
+                elif t == "step-start":
+                    texts.append("---")
+                elif t == "step-finish":
+                    tokens_info = p.get("tokens", {})
+                    if tokens_info:
+                        texts.append(f"[步骤完成] {tokens_info.get('total', 0)} tokens")
+            content = "\n".join(texts) if texts else ""
+            msg_list.append({
+                "id": m["id"],
+                "role": m["role"],
+                "content": content[:500],
+                "time": m["time"],
+            })
+        return {
+            "id": s["id"],
+            "title": s["title"],
+            "model": format_model(s.get("model", "")),
+            "directory": s["directory"],
+            "project": get_project_name(s["directory"]),
+            "messages": msg_list,
+            "message_count": len(msg_list),
+            "tokens_input": s.get("tokens_input", 0),
+            "tokens_output": s.get("tokens_output", 0),
+            "cost": s.get("cost", 0),
+        }
+
+    s1 = load_session(id1)
+    s2 = load_session(id2)
+    conn.close()
+
+    if not s1:
+        return jsonify({"error": f"会话 {id1} 不存在"}), 404
+    if not s2:
+        return jsonify({"error": f"会话 {id2} 不存在"}), 404
+
+    return jsonify({"session1": s1, "session2": s2})
 
 
 @app.route("/api/sessions/<session_id>")
@@ -701,6 +801,178 @@ def api_files():
         return jsonify({"error": "无权限访问该目录"}), 403
     except OSError as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── Phase 3: 统计图表数据 ──────────────────────────────
+
+
+@app.route("/api/stats/tokens")
+def api_stats_tokens():
+    """Token 消耗统计（按天/模型/项目）"""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # 最近 30 天每日 Token
+    thirty_days_ago = (int(time.time()) - 30 * 86400) * 1000
+    daily = cursor.execute(
+        """SELECT DATE(time_created / 1000, 'unixepoch') as day,
+                  SUM(tokens_input) as inp,
+                  SUM(tokens_output) as out
+           FROM session
+           WHERE time_created > ?
+           GROUP BY day
+           ORDER BY day""",
+        (thirty_days_ago,),
+    ).fetchall()
+
+    # 按模型汇总
+    by_model = cursor.execute(
+        """SELECT model,
+                  SUM(tokens_input) as inp,
+                  SUM(tokens_output) as out,
+                  SUM(cost) as cst
+           FROM session
+           WHERE model IS NOT NULL AND model != ''
+           GROUP BY model
+           ORDER BY inp DESC
+           LIMIT 15""",
+    ).fetchall()
+
+    # 按项目汇总
+    by_project = cursor.execute(
+        """SELECT directory,
+                  SUM(tokens_input) as inp,
+                  SUM(tokens_output) as out,
+                  COUNT(*) as cnt
+           FROM session
+           GROUP BY directory
+           ORDER BY inp DESC
+           LIMIT 15""",
+    ).fetchall()
+
+    conn.close()
+
+    # 全量总消耗（不受 LIMIT 限制）
+    conn2 = get_db()
+    total_cost_all = conn2.execute("SELECT COALESCE(SUM(cost), 0) FROM session").fetchone()[0]
+    conn2.close()
+
+    return jsonify({
+        "daily": [{"day": r["day"], "input": r["inp"] or 0, "output": r["out"] or 0} for r in daily],
+        "by_model": [{
+            "model": format_model(r["model"]),
+            "input": r["inp"] or 0,
+            "output": r["out"] or 0,
+            "cost": round(r["cst"] or 0, 6),
+        } for r in by_model],
+        "by_project": [{
+            "project": get_project_name(r["directory"]),
+            "input": r["inp"] or 0,
+            "output": r["out"] or 0,
+            "sessions": r["cnt"],
+        } for r in by_project],
+        "total_cost": round(total_cost_all, 6),
+    })
+
+
+# ── Phase 3: 会话分支（Fork） ───────────────────────────
+
+
+@app.route("/api/sessions/<session_id>/fork", methods=["POST"])
+def api_session_fork(session_id):
+    """分叉（fork）已有会话 — 创建分支后继续对话
+
+    调用 `opencode run --fork -s <session_id> <message> --format json`
+    从事件流中提取新 sessionID，通过 SSE 返回。
+    """
+    data = request.get_json(silent=True) or {}
+    message = (data.get("message") or "").strip()
+    model = (data.get("model") or "").strip()
+
+    if not message:
+        return jsonify({"error": "消息不能为空"}), 400
+
+    # 读取原会话的工作目录
+    conn = get_db()
+    row = conn.execute("SELECT directory FROM session WHERE id = ?", (session_id,)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "会话不存在"}), 404
+    directory = row["directory"]
+
+    def generate():
+        new_session_id = None
+        try:
+            cmd = [
+                "opencode", "run",
+                "--dir", directory,
+                "--fork", "-s", session_id,
+                message,
+                "--format", "json",
+            ]
+            if model:
+                cmd.insert(2, "-m")
+                cmd.insert(3, model)
+
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace",
+                stdin=subprocess.DEVNULL,
+            )
+
+            stderr_lines = []
+            def rs():
+                for line in proc.stderr:
+                    line = line.strip()
+                    if line: stderr_lines.append(line)
+            stderr_thread = threading.Thread(target=rs, daemon=True)
+            stderr_thread.start()
+
+            has_output = False
+            for line in proc.stdout:
+                line = line.strip()
+                if not line: continue
+                has_output = True
+                try:
+                    ev = json.loads(line)
+                    if not new_session_id and "sessionID" in ev:
+                        new_session_id = ev["sessionID"]
+                    ev_type = ev.get("type", "")
+                    part = ev.get("part", {})
+                    if ev_type == "text":
+                        txt = part.get("text", "")
+                        if txt:
+                            yield f"event: text\ndata: {txt.replace(chr(10), '\\n')}\n\n"
+                    elif ev_type == "reasoning" or part.get("type") == "reasoning":
+                        txt = part.get("text", ev.get("text", ""))
+                        if txt:
+                            yield f"event: thinking\ndata: {txt.replace(chr(10), '\\n')}\n\n"
+                    elif ev_type == "step_finish":
+                        tokens = part.get("tokens", {})
+                        yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
+                except json.JSONDecodeError:
+                    pass
+
+            proc.wait(timeout=600)
+            if not has_output and stderr_lines:
+                yield f"event: error\ndata: {' '.join(stderr_lines[-5:])[:500]}\n\n"
+            stderr_thread.join(timeout=2)
+
+        except FileNotFoundError:
+            yield "event: error\ndata: opencode CLI 未找到\n\n"
+        except subprocess.TimeoutExpired:
+            if proc: proc.kill()
+            yield "event: error\ndata: 请求超时\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {str(e)}\n\n"
+        finally:
+            yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or ''})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Connection": "keep-alive", "Cache-Control": "no-cache"},
+    )
 
 
 # ── 前端页面 ──────────────────────────────────────────────

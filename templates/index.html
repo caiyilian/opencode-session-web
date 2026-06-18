@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>OpenCode 会话</title>
 <link rel="stylesheet" href="/static/css/main.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body>
 <div class="app">
@@ -29,6 +30,7 @@
       <button class="back-btn" id="backBtn" onclick="showList()">&larr;</button>
       <h2 id="mainTitle">选择一个会话</h2>
       <span class="info" id="mainInfo"></span>
+      <button class="file-btn" id="forkBtn" onclick="forkSession()" title="从当前会话分叉（Fork）一个新分支" style="display:none">&#9889;</button>
       <button class="file-btn" id="fileBtn" onclick="toggleFilePanel()" title="浏览工作目录文件">&#128193;</button>
     </div>
     <div class="stats-bar" id="statsBar"></div>
@@ -46,6 +48,29 @@
           <span class="file-path" id="filePanelPath"></span>
         </div>
         <div class="file-tree" id="fileTree"></div>
+      </div>
+      <div class="stats-panel" id="statsPanel">
+        <div class="file-panel-header">
+          <span>&#128202; 统计</span>
+        </div>
+        <div class="stats-content" id="statsContent">
+          <div class="chart-container">
+            <h3>&#128200; 每日 Token 消耗</h3>
+            <canvas id="chartDaily"></canvas>
+          </div>
+          <div class="chart-container">
+            <h3>&#9889; 模型 Token 分布</h3>
+            <canvas id="chartModels"></canvas>
+          </div>
+          <div class="chart-container">
+            <h3>&#128193; 项目 Token 排名</h3>
+            <canvas id="chartProjects"></canvas>
+          </div>
+          <div class="chart-container">
+            <h3>&#128202; 总览</h3>
+            <div id="statsOverview" class="stats-overview"></div>
+          </div>
+        </div>
       </div>
     </div>
     <!-- Input area (Phase 2) -->
