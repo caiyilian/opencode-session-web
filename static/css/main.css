@@ -360,3 +360,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .undo-link { font-size: 11px; color: var(--text-dim); cursor: pointer; padding: 2px 0;
              display: inline-block; transition: color .15s; }
 .undo-link:hover { color: var(--accent3); }
+
+/* ── Error message ── */
+.error-msg { background: #ff52521a; border: 1px solid #ff525240; border-radius: 6px;
+             padding: 10px 14px; color: #ff8a80; font-size: 13px; white-space: pre-wrap;
+             word-break: break-word; max-height: 200px; overflow-y: auto; }
