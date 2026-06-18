@@ -1,0 +1,9 @@
+feat: add file tree browsing (Phase 2 complete!)
+
+- Add GET /api/files?path=<path> endpoint with safety checks
+- File panel slides in from the right with expand/collapse directories
+- File icons by extension, file size display, hidden files skipped
+- Show file button in session header, hidden in list view
+- Mark Phase 2 as 5/5 complete in docs
+
+Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>
