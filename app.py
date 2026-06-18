@@ -506,6 +506,109 @@ def api_session_stream(session_id):
     )
 
 
+# ── Phase 2: 新建会话 ──────────────────────────────────
+
+
+@app.route("/api/sessions/new", methods=["POST"])
+def api_session_new():
+    """新建会话 — SSE 流式返回
+
+    调用 `opencode run --dir <directory> <message> --format json`
+    从 JSON 事件流中提取新 sessionID，转换为 SSE 事件推送到前端。
+    """
+    data = request.get_json(silent=True) or {}
+    directory = (data.get("directory") or "").strip()
+    message = (data.get("message") or "").strip()
+
+    if not message:
+        return jsonify({"error": "消息不能为空"}), 400
+    if not directory or not os.path.isdir(directory):
+        return jsonify({"error": "无效的工作目录"}), 400
+
+    def generate():
+        proc = None
+        new_session_id = None
+        try:
+            cmd = [
+                "opencode", "run",
+                "--dir", directory,
+                message,
+                "--format", "json",
+            ]
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                stdin=subprocess.DEVNULL,
+            )
+
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                    event_type = event.get("type", "")
+                    part = event.get("part", {})
+
+                    # 从第一个事件中提取新 session ID
+                    if not new_session_id and "sessionID" in event:
+                        new_session_id = event["sessionID"]
+
+                    if event_type == "text":
+                        text = part.get("text", "")
+                        if text:
+                            safe_text = text.replace("\n", "\\n")
+                            yield f"event: text\ndata: {safe_text}\n\n"
+
+                    elif event_type == "reasoning" or part.get("type") == "reasoning":
+                        text = part.get("text", event.get("text", ""))
+                        if text:
+                            safe_text = text.replace("\n", "\\n")
+                            yield f"event: thinking\ndata: {safe_text}\n\n"
+
+                    elif event_type == "step_finish":
+                        tokens = part.get("tokens", {})
+                        result = json.dumps({
+                            "session_id": new_session_id or "",
+                            "tokens": tokens,
+                            "cost": part.get("cost", 0),
+                        })
+                        yield f"event: done\ndata: {result}\n\n"
+
+                except json.JSONDecodeError:
+                    pass
+
+            if proc:
+                proc.wait(timeout=600)
+
+        except FileNotFoundError:
+            yield "event: error\ndata: opencode CLI 未找到，请确认已安装 opencode\n\n"
+        except subprocess.TimeoutExpired:
+            if proc:
+                proc.kill()
+            yield "event: error\ndata: 请求超时\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {str(e)}\n\n"
+        finally:
+            if not new_session_id:
+                # 如果没拿到 session ID 也发 done
+                yield f"event: done\ndata: {json.dumps({'session_id': ''})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
 # ── 前端页面 ──────────────────────────────────────────────
 
 @app.route("/")

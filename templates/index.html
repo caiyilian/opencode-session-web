@@ -16,7 +16,10 @@
       <input class="search-box" id="searchBox" placeholder="搜索会话..." oninput="onSearch()">
     </div>
     <div class="sidebar-content" id="sessionList"></div>
-    <div class="sidebar-footer" id="statsFooter"></div>
+    <div class="sidebar-footer">
+      <button class="new-session-btn" onclick="showNewSessionModal()">&#65291; 新建会话</button>
+      <div id="statsFooter"></div>
+    </div>
   </aside>
 
   <!-- Main -->
@@ -41,6 +44,21 @@
       <button class="send-btn" id="sendBtn" onclick="sendMessage()">发送</button>
     </div>
   </main>
+</div>
+
+<!-- New Session Modal -->
+<div class="modal-overlay" id="newSessionModal" onclick="if(event.target===this)closeNewSessionModal()">
+  <div class="modal">
+    <h2>&#128196; 新建会话</h2>
+    <label for="newSessionDir">工作目录</label>
+    <select id="newSessionDir"></select>
+    <label for="newSessionMsg">初始消息</label>
+    <textarea id="newSessionMsg" placeholder="输入第一条消息..." rows="3"></textarea>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeNewSessionModal()">取消</button>
+      <button class="btn-primary" id="newSessionSubmit" onclick="startNewSession()">开始对话</button>
+    </div>
+  </div>
 </div>
 
 <script src="/static/js/app.js"></script>
