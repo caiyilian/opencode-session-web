@@ -559,12 +559,34 @@ def run_opencode_stream(cmd, session_id, timeout=600):
     stderr_thread.start()
 
     has_any_output = False
-    try:
+    # 用队列实现带超时的 stdout 读取，8 秒无响应则检查 stderr
+    stdout_queue = queue.Queue()
+    def read_stdout():
         for line in proc.stdout:
+            stdout_queue.put(line)
+        stdout_queue.put(None)
+    stdout_thread = threading.Thread(target=read_stdout, daemon=True)
+    stdout_thread.start()
+
+    try:
+        while True:
+            try:
+                line = stdout_queue.get(timeout=8)
+            except queue.Empty:
+                with stderr_lock:
+                    if stderr_lines:
+                        err_text = "\n".join(stderr_lines[-5:])
+                        try: proc.kill()
+                        except: pass
+                        yield f"event: error\ndata: {err_text[:500]}\n\n"
+                        return
+                continue
+            if line is None:
+                break
+            has_any_output = True
             line = line.strip()
             if not line:
                 continue
-            has_any_output = True
             try:
                 event = json.loads(line)
                 event_type = event.get("type", "")
@@ -605,17 +627,23 @@ def run_opencode_stream(cmd, session_id, timeout=600):
 
         proc.wait(timeout=timeout)
 
-        # 如果 stdout 没有任何输出，发送 stderr 作为错误
         if not has_any_output and stderr_lines:
-            err_text = "\n".join(stderr_lines[-10:])  # 最多最近 10 行
+            err_text = "\n".join(stderr_lines[-10:])
             yield f"event: error\ndata: {err_text[:500]}\n\n"
 
+    except GeneratorExit:
+        # 客户端断开连接，杀死子进程
+        try: proc.kill()
+        except: pass
+        try: proc.wait(timeout=5)
+        except: pass
     except subprocess.TimeoutExpired:
-        proc.kill()
+        try: proc.kill()
+        except: pass
         yield "event: error\ndata: 请求超时\n\n"
     finally:
-        # 确保 stderr 线程结束
         stderr_thread.join(timeout=2)
+        stdout_thread.join(timeout=2)
 
 
 # ── Phase 2: SSE 流式输出 ──────────────────────────────
@@ -1023,6 +1051,49 @@ def api_session_fork(session_id):
         mimetype="text/event-stream",
         headers={"X-Accel-Buffering": "no", "Connection": "keep-alive", "Cache-Control": "no-cache"},
     )
+
+
+# ── Phase 3: Undo ──────────────────────────────────────
+
+
+@app.route("/api/sessions/<session_id>/undo", methods=["POST"])
+def api_session_undo(session_id):
+    """撤销最后一次用户消息及其后的所有 AI 回复"""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # 找到最后一个 user 角色的消息
+    last_user = cursor.execute(
+        """SELECT m.id FROM message m
+           WHERE m.session_id = ? AND json_extract(m.data, '$.role') = 'user'
+           ORDER BY m.time_created DESC LIMIT 1""",
+        (session_id,),
+    ).fetchone()
+
+    if not last_user:
+        conn.close()
+        return jsonify({"error": "没有可撤销的消息"}), 400
+
+    last_user_id = last_user["id"]
+
+    # 删除此消息及之后的所有消息的 part
+    cursor.execute(
+        """DELETE FROM part WHERE message_id IN (
+            SELECT id FROM message WHERE session_id = ? AND time_created >= (
+                SELECT time_created FROM message WHERE id = ?
+            )
+        )""",
+        (session_id, last_user_id),
+    )
+    # 删除消息
+    cursor.execute(
+        "DELETE FROM message WHERE session_id = ? AND time_created >= (SELECT time_created FROM message WHERE id = ?)",
+        (session_id, last_user_id),
+    )
+
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok", "message": f"已撤销到 {last_user_id}"})
 
 
 # ── 前端页面 ──────────────────────────────────────────────
