@@ -20,6 +20,41 @@ async function api(path) {
 
 // ── Markdown rendering ──
 
+// Render message parts into HTML
+function renderParts(parts) {
+  if (!parts || parts.length === 0) return '(空)';
+  let html = '';
+  for (const p of parts) {
+    if (p.type === 'text') {
+      html += renderMarkdown(p.text || '');
+    } else if (p.type === 'reasoning') {
+      if (p.text) {
+        const id = 'reason_' + Math.random().toString(36).slice(2, 8);
+        html += `<details class="thinking-block" id="${id}"><summary>💭 思考过程</summary><div class="thinking-text">${escHtml(p.text)}</div></details>`;
+      }
+    } else if (p.type === 'tool') {
+      const cmd = (p.input || '').slice(0, 200);
+      html += `<div class="tool-call"><span class="tool-badge">🔧 ${escHtml(p.tool)}</span>`
+        + (cmd ? `<code class="tool-input">${escHtml(cmd)}</code>` : '') + `</div>`;
+    } else if (p.type === 'tool_result') {
+      if (p.is_hidden) {
+        html += `<div class="tool-result-hidden">📎 ${escHtml(p.tool_name)} — 输出已隐藏</div>`;
+      } else if (p.content) {
+        const id = 'tr_' + Math.random().toString(36).slice(2, 8);
+        const content = typeof p.content === 'string' ? p.content : JSON.stringify(p.content, null, 2);
+        const preview = content.slice(0, 300);
+        const isLong = content.length > 300;
+        html += `<details class="tool-result-block" id="${id}"><summary>📦 ${escHtml(p.tool_name)} 结果${isLong ? ' (' + content.length + ' 字节)' : ''}</summary>
+          <pre class="tool-result-content"><code>${escHtml(isLong ? preview + '\n...' : content)}</code></pre></details>`;
+      }
+    } else if (p.type === 'step-finish') {
+      const tokens = p.tokens || {};
+      html += `<div class="step-meta">⚡ ${tokens.total || 0} tokens · $${(p.cost || 0).toFixed(6)}</div>`;
+    }
+  }
+  return html || '(空)';
+}
+
 // Configure marked with highlight.js
 if (typeof marked !== 'undefined' && typeof hljs !== 'undefined') {
   marked.setOptions({
@@ -254,7 +289,7 @@ async function openSession(id) {
       <div class="msg-avatar">${avatar}</div>
       <div class="msg-body">
         <div class="role-label">${label} · ${m.time_created}</div>
-        <div class="content md-content">${renderMarkdown(m.content) || '(空)'}</div>
+        <div class="content">${renderParts(m.parts)}</div>
         ${metaLine}
       </div>
     </div>`;
@@ -1092,7 +1127,7 @@ function renderCompareView(s1, s2) {
         const roleLabel = msg.role === 'user' ? '你' : msg.role === 'assistant' ? 'AI' : '工具';
         html += `<div class="compare-msg ${msg.role}">
           <div class="role-label">${roleLabel}</div>
-          <div class="content md-content">${renderMarkdown(msg.content) || '(空)'}</div>
+          <div class="content">${renderParts(msg.parts) || '(空)'}</div>
         </div>`;
       } else {
         html += `<div class="compare-msg empty"></div>`;

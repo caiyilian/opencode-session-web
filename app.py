@@ -276,14 +276,8 @@ def api_sessions_compare():
                 t = p.get("type", "")
                 if t == "text":
                     texts.append(p.get("text", ""))
-                elif t == "reasoning":
-                    rt = p.get("text", "")
-                    if rt:
-                        texts.append(f"[思考] {rt[:200]}")
                 elif t == "tool":
-                    texts.append(f"[工具] {p.get('tool', p.get('state', {}).get('status', ''))}")
-                elif t == "step-start":
-                    texts.append("---")
+                    texts.append(f"[工具] {p.get('tool', '')}")
                 elif t == "step-finish":
                     tokens_info = p.get("tokens", {})
                     if tokens_info:
@@ -292,6 +286,7 @@ def api_sessions_compare():
             msg_list.append({
                 "id": m["id"],
                 "role": m["role"],
+                "parts": m["parts"],
                 "content": content[:500],
                 "time": m["time"],
             })
@@ -382,34 +377,39 @@ def api_session_detail(session_id):
             except (json.JSONDecodeError, TypeError):
                 pass
 
-    # 将 parts 渲染为文本
+    # 将 parts 按类型传递给前端
     msg_list = []
     for mid in sorted(msg_map.keys(), key=lambda x: msg_map[x]["time_created_raw"]):
         m = msg_map[mid]
-        texts = []
+        parts_out = []
         for p in m["parts"]:
             t = p.get("type", "")
+            entry = {"type": t}
             if t == "text":
-                texts.append(p.get("text", ""))
+                entry["text"] = p.get("text", "")
             elif t == "reasoning":
-                reasoning_text = p.get("text", "")
-                if reasoning_text:
-                    texts.append(f"[思考] {reasoning_text[:200]}{'...' if len(reasoning_text) > 200 else ''}")
+                entry["text"] = p.get("text", "")
             elif t == "tool":
-                texts.append(f"[工具] {p.get('tool', p.get('state', {}).get('status', ''))}")
+                entry["tool"] = p.get("tool", p.get("state", {}).get("status", ""))
+                entry["input"] = str(p.get("input", p.get("arguments", "")))[:1000]
+                entry["state"] = p.get("state", {})
+            elif t == "tool_result":
+                entry["tool_name"] = p.get("tool_name", "")
+                entry["content"] = p.get("content", "")
+                entry["status"] = p.get("status", "success")
+                entry["is_hidden"] = p.get("is_hidden", False)
             elif t == "step-start":
-                texts.append("---")
+                pass
             elif t == "step-finish":
-                reason = p.get("reason", "")
-                tokens_info = p.get("tokens", {})
-                if tokens_info:
-                    texts.append(f"[步骤完成] {tokens_info.get('total', 0)} tokens")
-        content = "\n".join(texts) if texts else ""
+                entry["tokens"] = p.get("tokens", {})
+                entry["cost"] = p.get("cost", 0)
+                entry["reason"] = p.get("reason", "")
+            parts_out.append(entry)
 
         msg_list.append({
             "id": m["id"],
             "role": m["role"],
-            "content": content[:2000],
+            "parts": parts_out,
             "time_created": m["time_created"],
             "time_created_raw": m["time_created_raw"],
             "tokens": m["tokens"],
