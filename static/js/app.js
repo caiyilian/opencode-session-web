@@ -9,6 +9,8 @@ let allModels = [];       // 可用模型列表
 let currentModel = '';    // 当前选中模型
 let eventSource = null;
 let currentDirectory = '';  // 当前会话的工作目录
+let compareMode = false;    // 对比模式
+let compareIds = [];        // 选中的对比会话 ID 列表
 
 // ── API ──
 async function api(path) {
@@ -35,8 +37,14 @@ async function init() {
     <span>&#128193; 项目 <span class="num">${stats.total_projects}</span></span>
     <span>&#9889; Input <span class="num">${fmtTokens(stats.total_tokens_input)}</span></span>
     <span>&#9889; Output <span class="num">${fmtTokens(stats.total_tokens_output)}</span></span>
+    <button class="stats-btn" id="statsBtn" onclick="toggleStatsPanel()">&#128202; 详细统计</button>
   `;
-  document.getElementById('statsFooter').textContent = `共 ${stats.total_sessions} 个会话 · ${stats.total_projects} 个项目`;
+  document.getElementById('statsFooter').innerHTML = `
+    <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+      <span>共 ${stats.total_sessions} 个会话</span>
+      <button class="compare-btn" id="compareBtn" onclick="toggleCompareMode()">&#128196; 对比</button>
+    </div>
+  `;
 
   // Load directories
   const dirsData = await api('/api/directories');
@@ -118,8 +126,10 @@ function renderSidebar() {
       <div id="${gid}">`;
     for (const s of g.sessions) {
       const active = s.id === currentSessionId ? 'active' : '';
-      html += `<div class="session-item ${active}" onclick="openSession('${s.id}')">
-        <div class="title">${escHtml(s.title)}</div>
+      const checked = compareIds.includes(s.id) ? 'checked' : '';
+      const cb = compareMode ? `<input type="checkbox" class="compare-cb" ${checked} onchange="toggleCompareSelect('${s.id}', this)" onclick="event.stopPropagation()"> ` : '';
+      html += `<div class="session-item ${active}" onclick="${compareMode ? 'toggleCompareSelect(\'' + s.id + '\', this.querySelector(\'.compare-cb\'))' : 'openSession(\'' + s.id + '\')'}">
+        ${cb}<div class="title">${escHtml(s.title)}</div>
         <div class="meta">
           <span class="model">${s.model}</span>
           <span class="time">${s.time_updated}</span>
@@ -229,6 +239,7 @@ async function openSession(id) {
 
   // Show file button
   document.getElementById('fileBtn').style.display = 'block';
+  document.getElementById('forkBtn').style.display = 'block';
 
   // Show back button on mobile
   if (window.innerWidth <= 768) {
@@ -250,6 +261,7 @@ function showList() {
   document.getElementById('sessionList').innerHTML = '';
   document.getElementById('inputArea').classList.remove('show');
   document.getElementById('fileBtn').style.display = 'none';
+  document.getElementById('forkBtn').style.display = 'none';
   document.getElementById('filePanel').classList.remove('show');
   document.getElementById('fileBtn').classList.remove('active');
   filePanelOpen = false;
@@ -642,4 +654,354 @@ function fmtFileSize(bytes) {
   if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
   if (bytes >= 1024) return (bytes / 1024).toFixed(0) + ' KB';
   return bytes + ' B';
+}
+
+// ── Phase 3: Charts ──
+
+let statsOpen = false;
+let chartInstances = {};
+
+function toggleStatsPanel() {
+  statsOpen = !statsOpen;
+  const panel = document.getElementById('statsPanel');
+  const btn = document.getElementById('statsBtn');
+  panel.classList.toggle('show', statsOpen);
+  btn.classList.toggle('active', statsOpen);
+  if (statsOpen) {
+    loadStatsData();
+  }
+}
+
+async function loadStatsData() {
+  try {
+    const data = await api('/api/stats/tokens');
+    renderCharts(data);
+    renderOverview(data);
+  } catch (e) {
+    document.getElementById('statsContent').innerHTML =
+      `<div class="file-entry loading">加载失败: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function renderCharts(data) {
+  // Destroy old charts
+  for (const key in chartInstances) {
+    chartInstances[key].destroy();
+  }
+  chartInstances = {};
+
+  const chartOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { labels: { color: '#8899aa', font: { size: 11 } } },
+    },
+  };
+
+  // 1. Daily token chart
+  if (data.daily && data.daily.length > 0) {
+    const ctx = document.getElementById('chartDaily').getContext('2d');
+    chartInstances.daily = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: data.daily.map(d => d.day.slice(5)),
+        datasets: [
+          { label: 'Input', data: data.daily.map(d => Math.round(d.input / 1000)),
+            backgroundColor: '#4fc3f780', borderRadius: 3 },
+          { label: 'Output', data: data.daily.map(d => Math.round(d.output / 1000)),
+            backgroundColor: '#81c78480', borderRadius: 3 },
+        ],
+      },
+      options: {
+        ...chartOpts,
+        scales: {
+          x: { ticks: { color: '#8899aa', font: { size: 10 } }, grid: { color: '#2a3a5a' } },
+          y: { ticks: { color: '#8899aa', font: { size: 10 } }, grid: { color: '#2a3a5a' },
+               title: { display: true, text: 'K tokens', color: '#8899aa', font: { size: 10 } } },
+        },
+      },
+    });
+  }
+
+  // 2. Model chart
+  if (data.by_model && data.by_model.length > 0) {
+    const ctx2 = document.getElementById('chartModels').getContext('2d');
+    const labels = data.by_model.map(m => m.model.split('/').pop());
+    chartInstances.models = new Chart(ctx2, {
+      type: 'doughnut',
+      data: {
+        labels,
+        datasets: [{
+          data: data.by_model.map(m => Math.round((m.input + m.output) / 1000)),
+          backgroundColor: ['#4fc3f7', '#81c784', '#ffb74d', '#e57373', '#ba68c8',
+                            '#4db6ac', '#ff8a65', '#90a4ae', '#a1887f', '#7986cb'],
+          borderWidth: 0,
+        }],
+      },
+      options: {
+        ...chartOpts,
+        plugins: {
+          ...chartOpts.plugins,
+          legend: { position: 'right', labels: { color: '#8899aa', font: { size: 10 } } },
+        },
+      },
+    });
+  }
+
+  // 3. Project chart
+  if (data.by_project && data.by_project.length > 0) {
+    const ctx3 = document.getElementById('chartProjects').getContext('2d');
+    chartInstances.projects = new Chart(ctx3, {
+      type: 'bar',
+      data: {
+        labels: data.by_project.map(p => p.project),
+        datasets: [{
+          label: 'Total tokens',
+          data: data.by_project.map(p => Math.round((p.input + p.output) / 1000)),
+          backgroundColor: '#4fc3f780', borderRadius: 3,
+        }],
+      },
+      options: {
+        ...chartOpts,
+        indexAxis: 'y',
+        scales: {
+          x: { ticks: { color: '#8899aa', font: { size: 10 } }, grid: { color: '#2a3a5a' },
+               title: { display: true, text: 'K tokens', color: '#8899aa', font: { size: 10 } } },
+          y: { ticks: { color: '#8899aa', font: { size: 10 } }, grid: { display: false } },
+        },
+      },
+    });
+  }
+}
+
+function renderOverview(data) {
+  const totalInput = data.by_model ? data.by_model.reduce((s, m) => s + m.input, 0) : 0;
+  const totalOutput = data.by_model ? data.by_model.reduce((s, m) => s + m.output, 0) : 0;
+  const totalCost = data.total_cost || 0;
+
+  document.getElementById('statsOverview').innerHTML = `
+    <div class="stat-card">
+      <div class="stat-label">总 Input</div>
+      <div class="stat-value">${fmtTokens(totalInput)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">总 Output</div>
+      <div class="stat-value">${fmtTokens(totalOutput)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">总消耗</div>
+      <div class="stat-value">$${totalCost.toFixed(4)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">模型数</div>
+      <div class="stat-value">${data.by_model ? data.by_model.length : 0}</div>
+      <div class="stat-sub">30 天内</div>
+    </div>
+  `;
+}
+
+// ── Phase 3: Fork session ──
+
+async function forkSession() {
+  if (!currentSessionId) return;
+  const message = prompt('输入分叉后的第一条消息（Fork 后将创建新会话）：');
+  if (!message) return;
+
+  const submitBtn = document.getElementById('sendBtn');
+  const textarea = document.getElementById('msgInput');
+  submitBtn.disabled = true;
+
+  const streamId = 'fork_' + Date.now();
+  const messagesArea = document.getElementById('messagesArea');
+  const inputArea = document.getElementById('inputArea');
+  const mainTitle = document.getElementById('mainTitle');
+  const mainInfo = document.getElementById('mainInfo');
+
+  mainTitle.textContent = '分叉中...';
+  inputArea.classList.remove('show');
+
+  messagesArea.innerHTML += `<div class="msg user">
+    <div class="msg-avatar">U</div>
+    <div class="msg-body">
+      <div class="role-label">你 · 分叉点</div>
+      <div class="content">${escHtml(message)}</div>
+    </div>
+  </div>
+  <div class="msg assistant streaming" id="${streamId}">
+    <div class="msg-avatar">AI</div>
+    <div class="msg-body">
+      <div class="role-label">AI · 分叉中...</div>
+      <div class="thinking-content" id="${streamId}_thinking"></div>
+      <div class="content" id="${streamId}_text"></div>
+      <div class="loading" id="${streamId}_loading" style="padding:10px"><div class="spinner"></div></div>
+    </div>
+  </div>`;
+  messagesArea.scrollTop = messagesArea.scrollHeight;
+
+  try {
+    const response = await fetch(`/api/sessions/${currentSessionId}/fork`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, model: currentModel || undefined }),
+    });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || '分叉失败');
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let newId = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop() || '';
+      for (const block of events) {
+        const lines = block.split('\n');
+        let eventType = '', data = '';
+        for (const line of lines) {
+          if (line.startsWith('event: ')) eventType = line.slice(7);
+          else if (line.startsWith('data: ')) data = line.slice(6);
+        }
+        if (eventType === 'thinking') {
+          const el = document.getElementById(streamId + '_thinking');
+          if (el && el.textContent.length < 2000) el.textContent += data.replace(/\\n/g, '\n');
+        } else if (eventType === 'text') {
+          const el = document.getElementById(streamId + '_text');
+          if (el) el.textContent += data.replace(/\\n/g, '\n');
+        } else if (eventType === 'done') {
+          const info = JSON.parse(data || '{}');
+          newId = info.session_id;
+        } else if (eventType === 'error') {
+          throw new Error(data);
+        }
+      }
+    }
+
+    // End streaming
+    const loading = document.getElementById(streamId + '_loading');
+    const msgEl = document.getElementById(streamId);
+    if (loading) loading.remove();
+    if (msgEl) msgEl.classList.remove('streaming');
+
+    if (newId) {
+      // Refresh and navigate to new session
+      currentSessionId = newId;
+      const sessData = await api('/api/sessions?limit=200');
+      allSessions = sessData.sessions;
+      sessions = allSessions;
+      renderSidebar();
+      openSession(newId);
+    } else {
+      inputArea.classList.add('show');
+      mainTitle.textContent = '分叉完成';
+    }
+  } catch (e) {
+    const loading = document.getElementById(streamId + '_loading');
+    if (loading) loading.remove();
+    messagesArea.innerHTML += `<div class="empty-state"><p style="color:var(--accent3)">错误: ${escHtml(e.message)}</p></div>`;
+  } finally {
+    submitBtn.disabled = false;
+  }
+}
+
+// ── Phase 3: Compare sessions ──
+
+function toggleCompareMode() {
+  compareMode = !compareMode;
+  compareIds = [];
+  document.getElementById('compareBtn').classList.toggle('active', compareMode);
+  renderSidebar();
+  if (compareMode) {
+    document.getElementById('mainTitle').textContent = '选择两个会话进行对比';
+    document.getElementById('messagesArea').innerHTML = `<div class="empty-state"><p>在左侧勾选两个会话，然后点击「开始对比」</p></div>`;
+    document.getElementById('inputArea').classList.remove('show');
+    document.getElementById('fileBtn').style.display = 'none';
+    document.getElementById('forkBtn').style.display = 'none';
+    document.getElementById('backBtn').style.display = 'block';
+  } else {
+    showList();
+  }
+}
+
+function toggleCompareSelect(id, cb) {
+  if (cb && cb.checked !== undefined) {
+    if (cb.checked) {
+      if (compareIds.length >= 2) {
+        cb.checked = false;
+        return;
+      }
+      compareIds.push(id);
+    } else {
+      compareIds = compareIds.filter(i => i !== id);
+    }
+  }
+  renderSidebar();
+  if (compareIds.length === 2) {
+    doCompare();
+  }
+}
+
+async function doCompare() {
+  const id1 = compareIds[0], id2 = compareIds[1];
+  const messagesArea = document.getElementById('messagesArea');
+  messagesArea.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+  try {
+    const data = await api(`/api/sessions/compare?id1=${encodeURIComponent(id1)}&id2=${encodeURIComponent(id2)}`);
+    if (data.error) {
+      messagesArea.innerHTML = `<div class="empty-state"><p>${escHtml(data.error)}</p></div>`;
+      return;
+    }
+    renderCompareView(data.session1, data.session2);
+  } catch (e) {
+    messagesArea.innerHTML = `<div class="empty-state"><p>对比失败: ${escHtml(e.message)}</p></div>`;
+  }
+}
+
+function renderCompareView(s1, s2) {
+  const messagesArea = document.getElementById('messagesArea');
+  document.getElementById('mainTitle').textContent = '会话对比';
+  document.getElementById('mainInfo').textContent = '';
+
+  // Prepare messages aligned
+  const maxLen = Math.max(s1.messages.length, s2.messages.length);
+
+  let html = `<div class="compare-header">
+    <div class="compare-col">
+      <div class="compare-title">${escHtml(s1.title)}</div>
+      <div class="compare-meta">${s1.model} · ${s1.message_count} 条 · ${fmtTokens(s1.tokens_input + s1.tokens_output)} tokens</div>
+    </div>
+    <div class="compare-col">
+      <div class="compare-title">${escHtml(s2.title)}</div>
+      <div class="compare-meta">${s2.model} · ${s2.message_count} 条 · ${fmtTokens(s2.tokens_input + s2.tokens_output)} tokens</div>
+    </div>
+  </div>`;
+
+  for (let i = 0; i < maxLen; i++) {
+    const msg1 = i < s1.messages.length ? s1.messages[i] : null;
+    const msg2 = i < s2.messages.length ? s2.messages[i] : null;
+    html += `<div class="compare-row">`;
+    for (const msg of [msg1, msg2]) {
+      if (msg) {
+        const roleLabel = msg.role === 'user' ? '你' : msg.role === 'assistant' ? 'AI' : '工具';
+        html += `<div class="compare-msg ${msg.role}">
+          <div class="role-label">${roleLabel}</div>
+          <div class="content">${escHtml(msg.content) || '(空)'}</div>
+        </div>`;
+      } else {
+        html += `<div class="compare-msg empty"></div>`;
+      }
+    }
+    html += `</div>`;
+  }
+
+  html += `<div style="padding:12px;text-align:center;color:var(--text-dim);font-size:12px">
+    Token 消耗: S1=${fmtTokens(s1.tokens_input + s1.tokens_output)} | S2=${fmtTokens(s2.tokens_input + s2.tokens_output)} | 费用: $${s1.cost?.toFixed(4) || '0'} / $${s2.cost?.toFixed(4) || '0'}
+  </div>`;
+
+  messagesArea.innerHTML = html;
 }
