@@ -776,6 +776,106 @@ def api_stats_tokens():
     })
 
 
+# ── Phase 3: 会话分支（Fork） ───────────────────────────
+
+
+@app.route("/api/sessions/<session_id>/fork", methods=["POST"])
+def api_session_fork(session_id):
+    """分叉（fork）已有会话 — 创建分支后继续对话
+
+    调用 `opencode run --fork -s <session_id> <message> --format json`
+    从事件流中提取新 sessionID，通过 SSE 返回。
+    """
+    data = request.get_json(silent=True) or {}
+    message = (data.get("message") or "").strip()
+    model = (data.get("model") or "").strip()
+
+    if not message:
+        return jsonify({"error": "消息不能为空"}), 400
+
+    # 读取原会话的工作目录
+    conn = get_db()
+    row = conn.execute("SELECT directory FROM session WHERE id = ?", (session_id,)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "会话不存在"}), 404
+    directory = row["directory"]
+
+    def generate():
+        new_session_id = None
+        try:
+            cmd = [
+                "opencode", "run",
+                "--dir", directory,
+                "--fork", "-s", session_id,
+                message,
+                "--format", "json",
+            ]
+            if model:
+                cmd.insert(2, "-m")
+                cmd.insert(3, model)
+
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace",
+                stdin=subprocess.DEVNULL,
+            )
+
+            stderr_lines = []
+            def rs():
+                for line in proc.stderr:
+                    line = line.strip()
+                    if line: stderr_lines.append(line)
+            stderr_thread = threading.Thread(target=rs, daemon=True)
+            stderr_thread.start()
+
+            has_output = False
+            for line in proc.stdout:
+                line = line.strip()
+                if not line: continue
+                has_output = True
+                try:
+                    ev = json.loads(line)
+                    if not new_session_id and "sessionID" in ev:
+                        new_session_id = ev["sessionID"]
+                    ev_type = ev.get("type", "")
+                    part = ev.get("part", {})
+                    if ev_type == "text":
+                        txt = part.get("text", "")
+                        if txt:
+                            yield f"event: text\ndata: {txt.replace(chr(10), '\\n')}\n\n"
+                    elif ev_type == "reasoning" or part.get("type") == "reasoning":
+                        txt = part.get("text", ev.get("text", ""))
+                        if txt:
+                            yield f"event: thinking\ndata: {txt.replace(chr(10), '\\n')}\n\n"
+                    elif ev_type == "step_finish":
+                        tokens = part.get("tokens", {})
+                        yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
+                except json.JSONDecodeError:
+                    pass
+
+            proc.wait(timeout=600)
+            if not has_output and stderr_lines:
+                yield f"event: error\ndata: {' '.join(stderr_lines[-5:])[:500]}\n\n"
+            stderr_thread.join(timeout=2)
+
+        except FileNotFoundError:
+            yield "event: error\ndata: opencode CLI 未找到\n\n"
+        except subprocess.TimeoutExpired:
+            if proc: proc.kill()
+            yield "event: error\ndata: 请求超时\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {str(e)}\n\n"
+        finally:
+            yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or ''})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Connection": "keep-alive", "Cache-Control": "no-cache"},
+    )
+
+
 # ── 前端页面 ──────────────────────────────────────────────
 
 @app.route("/")
