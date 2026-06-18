@@ -34,8 +34,23 @@ function renderParts(parts) {
       }
     } else if (p.type === 'tool') {
       const cmd = (p.input || '').slice(0, 200);
-      html += `<div class="tool-call"><span class="tool-badge">🔧 ${escHtml(p.tool)}</span>`
-        + (cmd ? `<code class="tool-input">${escHtml(cmd)}</code>` : '') + `</div>`;
+      const desc = p.description || '';
+      const output = p.output || '';
+      const hidden = p.is_hidden;
+      let toolHtml = `<div class="tool-call"><span class="tool-badge">🔧 ${escHtml(p.tool)}</span>`;
+      if (desc) toolHtml += `<span class="tool-desc">${escHtml(desc)}</span>`;
+      if (cmd) toolHtml += `<code class="tool-input">${escHtml(cmd)}</code>`;
+      toolHtml += `</div>`;
+      if (hidden) {
+        toolHtml += `<div class="tool-result-hidden">📎 输出已隐藏</div>`;
+      } else if (output) {
+        const id = 'to_' + Math.random().toString(36).slice(2, 8);
+        const isLong = output.length > 300;
+        const preview = output.slice(0, 300);
+        toolHtml += `<details class="tool-result-block" id="${id}"><summary>📦 输出${isLong ? ' (' + output.length + ' 字节)' : ''}</summary>
+          <pre class="tool-result-content"><code>${escHtml(isLong ? preview + '\n...' : output)}</code></pre></details>`;
+      }
+      html += toolHtml;
     } else if (p.type === 'tool_result') {
       if (p.is_hidden) {
         html += `<div class="tool-result-hidden">📎 ${escHtml(p.tool_name)} — 输出已隐藏</div>`;

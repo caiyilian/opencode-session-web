@@ -390,9 +390,20 @@ def api_session_detail(session_id):
             elif t == "reasoning":
                 entry["text"] = p.get("text", "")
             elif t == "tool":
-                entry["tool"] = p.get("tool", p.get("state", {}).get("status", ""))
-                entry["input"] = str(p.get("input", p.get("arguments", "")))[:1000]
-                entry["state"] = p.get("state", {})
+                entry["tool"] = p.get("tool", "")
+                state = p.get("state", {})
+                sinp = state.get("input", {})
+                if isinstance(sinp, dict):
+                    # bash: {command, description}; glob: {pattern}; edit: {file_path, ...}
+                    cmd = sinp.get("command") or sinp.get("pattern") or sinp.get("file_path") or ""
+                    desc = sinp.get("description", "")
+                    entry["input"] = str(cmd)[:500]
+                    entry["description"] = str(desc)[:200]
+                else:
+                    entry["input"] = str(sinp)[:500]
+                    entry["description"] = ""
+                entry["output"] = state.get("output", "")[:2000]
+                entry["is_hidden"] = state.get("metadata", {}).get("truncated", False) if isinstance(state.get("metadata"), dict) else False
             elif t == "tool_result":
                 entry["tool_name"] = p.get("tool_name", "")
                 entry["content"] = p.get("content", "")
