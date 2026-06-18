@@ -313,6 +313,19 @@ async function openSession(id) {
   messagesArea.innerHTML = html;
   messagesArea.scrollTop = messagesArea.scrollHeight;
 
+  // Add undo button to header
+  const mainInfo = document.getElementById('mainInfo');
+  const existingUndo = document.getElementById('undoHeaderBtn');
+  if (!existingUndo) {
+    const undoBtn = document.createElement('span');
+    undoBtn.id = 'undoHeaderBtn';
+    undoBtn.className = 'undo-link';
+    undoBtn.textContent = ' ↩ 撤销上一条';
+    undoBtn.style.marginLeft = '12px';
+    undoBtn.onclick = undoLastAction;
+    mainInfo.parentNode.insertBefore(undoBtn, mainInfo.nextSibling);
+  }
+
   // Show input area (Phase 2)
   inputArea.classList.add('show');
 
@@ -348,6 +361,8 @@ function showList() {
   document.getElementById('forkBtn').style.display = 'none';
   document.getElementById('filePanel').classList.remove('show');
   document.getElementById('fileBtn').classList.remove('active');
+  const undoHdr = document.getElementById('undoHeaderBtn');
+  if (undoHdr) undoHdr.remove();
   filePanelOpen = false;
   renderSidebar();
 }
@@ -474,7 +489,7 @@ async function sendMessage() {
       const undoLink = document.createElement('div');
       undoLink.className = 'undo-link';
       undoLink.innerHTML = '↩ 撤销';
-      undoLink.onclick = () => undoLastAction(streamId);
+      undoLink.onclick = undoLastAction;
       msgEl.querySelector('.msg-body').appendChild(undoLink);
     }
     generationDone();
@@ -503,7 +518,7 @@ function stopGeneration() {
   textarea.focus();
 }
 
-async function undoLastAction(streamId) {
+async function undoLastAction() {
   if (!currentSessionId) return;
   try {
     const res = await fetch(`/api/sessions/${currentSessionId}/undo`, { method: 'POST' });
