@@ -1,0 +1,10 @@
+feat: implement SSE streaming for continuing sessions (Phase 2)
+
+- Add /api/sessions/<id>/stream SSE endpoint with opencode CLI subprocess
+- Pass --dir from session DB record to opencode run command
+- Convert opencode --format json events to SSE events (text/thinking/done)
+- Frontend: input box, send button, SSE event handlers with \n restore
+- Enable threaded mode for Flask dev server to support concurrent SSE
+- Update docs: mark Phase 2 completed items (3/5)
+
+Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>
