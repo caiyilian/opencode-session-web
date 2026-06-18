@@ -241,25 +241,59 @@ def api_sessions_compare():
             return None
         s = dict(row)
         msgs = cursor.execute(
-            "SELECT m.id, m.time_created, m.data FROM message m WHERE m.session_id = ? ORDER BY m.time_created ASC",
+            """SELECT m.id, m.time_created, m.data,
+                      p.data as part_data
+               FROM message m
+               LEFT JOIN part p ON p.message_id = m.id
+               WHERE m.session_id = ?
+               ORDER BY m.time_created ASC, p.id ASC""",
             (sid,),
         ).fetchall()
-        msg_list = []
+        msg_map = {}
         for m in msgs:
-            try:
-                data = json.loads(m["data"])
-            except (json.JSONDecodeError, TypeError):
-                data = {}
-            role = data.get("role", "unknown")
-            content = data.get("content") or data.get("text", "")
-            if isinstance(content, list):
-                texts = [p.get("text", "") if isinstance(p, dict) else str(p) for p in content]
-                content = "\n".join(texts)
+            mid = m["id"]
+            if mid not in msg_map:
+                try:
+                    d = json.loads(m["data"])
+                except (json.JSONDecodeError, TypeError):
+                    d = {}
+                msg_map[mid] = {
+                    "id": mid,
+                    "role": d.get("role", "unknown"),
+                    "time": m["time_created"],
+                    "parts": [],
+                }
+            if m["part_data"]:
+                try:
+                    msg_map[mid]["parts"].append(json.loads(m["part_data"]))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        msg_list = []
+        for mid in sorted(msg_map, key=lambda x: msg_map[x]["time"]):
+            m = msg_map[mid]
+            texts = []
+            for p in m["parts"]:
+                t = p.get("type", "")
+                if t == "text":
+                    texts.append(p.get("text", ""))
+                elif t == "reasoning":
+                    rt = p.get("text", "")
+                    if rt:
+                        texts.append(f"[思考] {rt[:200]}")
+                elif t == "tool":
+                    texts.append(f"[工具] {p.get('tool', p.get('state', {}).get('status', ''))}")
+                elif t == "step-start":
+                    texts.append("---")
+                elif t == "step-finish":
+                    tokens_info = p.get("tokens", {})
+                    if tokens_info:
+                        texts.append(f"[步骤完成] {tokens_info.get('total', 0)} tokens")
+            content = "\n".join(texts) if texts else ""
             msg_list.append({
                 "id": m["id"],
-                "role": role,
+                "role": m["role"],
                 "content": content[:500],
-                "time": m["time_created"],
+                "time": m["time"],
             })
         return {
             "id": s["id"],
