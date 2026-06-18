@@ -340,6 +340,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .tool-input { font-size: 12px; padding: 2px 8px; background: var(--bg3);
               border-radius: 4px; color: var(--accent2); font-family: 'Consolas', monospace;
               word-break: break-all; max-width: 100%; }
+.tool-desc { font-size: 11px; color: var(--text-dim); font-style: italic; }
 
 .tool-result-block { margin: 4px 0; background: var(--bg3); border-radius: var(--radius);
                      border-left: 3px solid var(--accent2); }
