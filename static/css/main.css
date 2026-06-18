@@ -107,8 +107,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 
 /* ── Input area (Phase 2) ── */
 .input-area { display: none; padding: 12px 20px; border-top: 1px solid var(--border);
-              background: var(--bg2); gap: 8px; align-items: flex-end; }
-.input-area.show { display: flex; }
+              background: var(--bg2); }
+.input-area.show { display: block; }
+.input-row { display: flex; gap: 8px; align-items: flex-end; }
+.model-select { padding: 10px 8px; border: 1px solid var(--border); border-radius: var(--radius);
+                background: var(--bg3); color: var(--text); font-size: 12px; font-family: inherit;
+                outline: none; cursor: pointer; max-width: 180px; min-width: 100px; }
+.model-select:focus { border-color: var(--accent); }
 .input-area textarea { flex: 1; padding: 10px 14px; border: 1px solid var(--border);
                         border-radius: var(--radius); background: var(--bg3); color: var(--text);
                         font-size: 14px; font-family: inherit; resize: none; outline: none;
