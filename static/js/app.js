@@ -625,7 +625,7 @@ function getFileIcon(name) {
     html: '🌐', css: '🎨', scss: '🎨', json: '📋', yml: '📋', yaml: '📋',
     md: '📝', txt: '📄', xml: '📋', toml: '📋',
     png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', svg: '🖼️',
-    zip: '📦', tar: '📦', gz: '📦', 7z: '📦',
+    zip: '📦', tar: '📦', gz: '📦', '7z': '📦',
     gitignore: '🙈', dockerfile: '🐳',
   };
   return icons[ext] || '📄';
