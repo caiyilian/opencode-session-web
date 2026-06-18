@@ -541,12 +541,22 @@ def run_opencode_stream(cmd, session_id, timeout=600):
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,  # 合并 stderr 到 stdout，错误信息当普通行处理
+        stderr=subprocess.PIPE,  # stderr 独立管道，Node.js 会立即刷新
         text=True,
         encoding="utf-8",
         errors="replace",
         stdin=subprocess.DEVNULL,
     )
+
+    # 收集 stderr 的线程（stderr 无缓冲，Node 的 console.error 立即到达）
+    stderr_lines = []
+    def read_stderr():
+        for line in proc.stderr:
+            line = line.strip()
+            if line:
+                stderr_lines.append(line)
+    stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+    stderr_thread.start()
 
     # 用队列实现带超时的 stdout 读取
     stdout_queue = queue.Queue()
@@ -557,21 +567,21 @@ def run_opencode_stream(cmd, session_id, timeout=600):
     stdout_thread = threading.Thread(target=read_stdout, daemon=True)
     stdout_thread.start()
 
-    error_lines = []
     has_json_output = False
+    last_stderr_check = 0
     try:
         while True:
             try:
-                line = stdout_queue.get(timeout=8)
+                line = stdout_queue.get(timeout=5)
             except queue.Empty:
-                if error_lines:
+                # 每 5 秒检查一次 stderr
+                if stderr_lines and not has_json_output:
                     try: proc.kill()
                     except: pass
-                    err_text = "\n".join(error_lines[-5:])
+                    err_text = "\n".join(stderr_lines[-5:])
                     yield f"event: error\ndata: {err_text[:500]}\n\n"
-                else:
-                    yield "event: error\ndata: 请求超时，模型无响应\n\n"
-                return
+                    return
+                continue
             if line is None:
                 break
             line = line.strip()
@@ -580,7 +590,6 @@ def run_opencode_stream(cmd, session_id, timeout=600):
             try:
                 event = json.loads(line)
                 has_json_output = True
-                error_lines = []  # 清空错误缓存，后续行正常处理
                 event_type = event.get("type", "")
                 part = event.get("part", {})
 
@@ -729,7 +738,7 @@ def api_session_new():
                 cmd.insert(3, model)
 
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace",
                 stdin=subprocess.DEVNULL,
             )
@@ -807,8 +816,7 @@ def api_session_new():
                         tokens = part.get("tokens", {})
                         yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
                 except json.JSONDecodeError:
-                    if not has_output:
-                        error_lines.append(line)
+                    pass
 
             proc.wait(timeout=600)
 
@@ -989,7 +997,7 @@ def api_session_fork(session_id):
                 cmd.insert(3, model)
 
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace",
                 stdin=subprocess.DEVNULL,
             )
@@ -1064,8 +1072,7 @@ def api_session_fork(session_id):
                         tokens = part.get("tokens", {})
                         yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
                 except json.JSONDecodeError:
-                    if not has_output:
-                        error_lines.append(line)
+                    pass
 
             proc.wait(timeout=600)
             if not has_output and stderr_lines:
