@@ -766,7 +766,7 @@ function renderCharts(data) {
 function renderOverview(data) {
   const totalInput = data.by_model ? data.by_model.reduce((s, m) => s + m.input, 0) : 0;
   const totalOutput = data.by_model ? data.by_model.reduce((s, m) => s + m.output, 0) : 0;
-  const totalCost = data.by_model ? data.by_model.reduce((s, m) => s + m.cost, 0) : 0;
+  const totalCost = data.total_cost || 0;
 
   document.getElementById('statsOverview').innerHTML = `
     <div class="stat-card">

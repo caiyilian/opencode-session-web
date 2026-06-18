@@ -753,6 +753,11 @@ def api_stats_tokens():
 
     conn.close()
 
+    # 全量总消耗（不受 LIMIT 限制）
+    conn2 = get_db()
+    total_cost_all = conn2.execute("SELECT COALESCE(SUM(cost), 0) FROM session").fetchone()[0]
+    conn2.close()
+
     return jsonify({
         "daily": [{"day": r["day"], "input": r["inp"] or 0, "output": r["out"] or 0} for r in daily],
         "by_model": [{
@@ -767,6 +772,7 @@ def api_stats_tokens():
             "output": r["out"] or 0,
             "sessions": r["cnt"],
         } for r in by_project],
+        "total_cost": round(total_cost_all, 6),
     })
 
 
