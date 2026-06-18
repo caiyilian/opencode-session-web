@@ -281,3 +281,34 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .compare-msg.user { border-left: 2px solid #1565c0; }
 .compare-msg.assistant { border-left: 2px solid #2e7d32; }
 .compare-msg.empty { background: transparent; border-left: 1px dashed var(--border); }
+
+/* ── Markdown content ── */
+.md-content { line-height: 1.7; }
+.md-content p { margin-bottom: 8px; }
+.md-content p:last-child { margin-bottom: 0; }
+.md-content ul, .md-content ol { margin: 4px 0 8px 16px; }
+.md-content li { margin-bottom: 2px; }
+.md-content blockquote { border-left: 3px solid var(--accent); padding: 4px 12px;
+                         margin: 8px 0; color: var(--text-dim); background: var(--bg3);
+                         border-radius: 0 var(--radius) var(--radius) 0; }
+.md-content h1, .md-content h2, .md-content h3,
+.md-content h4, .md-content h5, .md-content h6 {
+  color: var(--text-bright); margin: 12px 0 6px; font-weight: 600; }
+.md-content h1 { font-size: 18px; }
+.md-content h2 { font-size: 16px; }
+.md-content h3 { font-size: 15px; }
+.md-content h4 { font-size: 14px; }
+.md-content code { background: var(--bg3); padding: 2px 6px; border-radius: 3px;
+                    font-size: 13px; color: var(--accent2); font-family: 'Consolas', 'Courier New', monospace; }
+.md-content pre { margin: 8px 0; border-radius: var(--radius); overflow-x: auto;
+                  position: relative; }
+.md-content pre code { background: none; padding: 0; color: inherit; }
+.md-content table { border-collapse: collapse; margin: 8px 0; width: 100%; }
+.md-content th, .md-content td { border: 1px solid var(--border); padding: 6px 10px;
+                                  text-align: left; font-size: 13px; }
+.md-content th { background: var(--bg3); color: var(--text-bright); font-weight: 600; }
+.md-content hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.md-content a { color: var(--accent); text-decoration: none; }
+.md-content a:hover { text-decoration: underline; }
+.md-content strong { color: var(--text-bright); }
+.md-content img { max-width: 100%; border-radius: var(--radius); margin: 8px 0; }
