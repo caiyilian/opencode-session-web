@@ -320,6 +320,11 @@ async function openSession(id) {
   document.getElementById('fileBtn').style.display = 'block';
   document.getElementById('forkBtn').style.display = 'block';
 
+  // Refresh file panel if open
+  if (filePanelOpen && currentDirectory) {
+    loadFileTree(currentDirectory);
+  }
+
   // Show back button on mobile
   if (window.innerWidth <= 768) {
     backBtn.style.display = 'block';
@@ -348,16 +353,13 @@ function showList() {
 }
 
 // ── Phase 2: Send message ──
+let streamAbortController = null;
+
 async function sendMessage() {
   const textarea = document.getElementById('msgInput');
   const sendBtn = document.getElementById('sendBtn');
   const text = textarea.value.trim();
   if (!text || !currentSessionId) return;
-
-  // Disable input
-  textarea.value = '';
-  textarea.disabled = true;
-  sendBtn.disabled = true;
 
   // Abort any existing stream
   if (eventSource) {
@@ -388,6 +390,13 @@ async function sendMessage() {
     </div>
   </div>`;
   messagesArea.scrollTop = messagesArea.scrollHeight;
+
+  // Change send button to stop button
+  textarea.value = '';
+  textarea.disabled = true;
+  sendBtn.textContent = '⏹ 停止';
+  sendBtn.disabled = false;
+  sendBtn.onclick = stopGeneration;
 
   // Start SSE stream
   const modelParam = currentModel ? '&model=' + encodeURIComponent(currentModel) : '';
@@ -439,24 +448,36 @@ async function sendMessage() {
     if (labelEl && e.data === 'step_start') labelEl.textContent = 'AI · 思考中...';
   });
 
+  function generationDone() {
+    eventSource.close();
+    eventSource = null;
+    textarea.disabled = false;
+    sendBtn.textContent = '发送';
+    sendBtn.onclick = sendMessage;
+    sendBtn.disabled = false;
+    textarea.focus();
+  }
+
   eventSource.addEventListener('done', (e) => {
     const loading = document.getElementById(streamId + '_loading');
     const msgEl = document.getElementById(streamId);
     const textEl = document.getElementById(streamId + '_text');
     if (loading) loading.remove();
     if (msgEl) msgEl.classList.remove('streaming');
-    // Re-render accumulated text as markdown
     if (textEl) {
       const fullText = textEl.textContent;
       textEl.innerHTML = renderMarkdown(fullText);
       textEl.classList.add('md-content');
     }
-    eventSource.close();
-    eventSource = null;
-    // Re-enable input
-    textarea.disabled = false;
-    sendBtn.disabled = false;
-    textarea.focus();
+    // Add undo link
+    if (msgEl) {
+      const undoLink = document.createElement('div');
+      undoLink.className = 'undo-link';
+      undoLink.innerHTML = '↩ 撤销';
+      undoLink.onclick = () => undoLastAction(streamId);
+      msgEl.querySelector('.msg-body').appendChild(undoLink);
+    }
+    generationDone();
   });
 
   eventSource.addEventListener('error', (e) => {
@@ -464,11 +485,35 @@ async function sendMessage() {
     const msgEl = document.getElementById(streamId);
     if (loading) loading.remove();
     if (msgEl) msgEl.classList.remove('streaming');
+    generationDone();
+  });
+}
+
+function stopGeneration() {
+  if (eventSource) {
     eventSource.close();
     eventSource = null;
-    textarea.disabled = false;
-    sendBtn.disabled = false;
-  });
+  }
+  const sendBtn = document.getElementById('sendBtn');
+  const textarea = document.getElementById('msgInput');
+  sendBtn.textContent = '发送';
+  sendBtn.onclick = sendMessage;
+  sendBtn.disabled = false;
+  textarea.disabled = false;
+  textarea.focus();
+}
+
+async function undoLastAction(streamId) {
+  if (!currentSessionId) return;
+  try {
+    const res = await fetch(`/api/sessions/${currentSessionId}/undo`, { method: 'POST' });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    // Reload session
+    openSession(currentSessionId);
+  } catch (e) {
+    alert('撤销失败: ' + e.message);
+  }
 }
 
 // Handle Enter key in textarea
