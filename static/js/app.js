@@ -18,6 +18,85 @@ async function api(path) {
   return res.json();
 }
 
+// ── Markdown rendering ──
+
+// Render message parts into HTML
+function renderParts(parts) {
+  if (!parts || parts.length === 0) return '(空)';
+  let html = '';
+  for (const p of parts) {
+    if (p.type === 'text') {
+      html += renderMarkdown(p.text || '');
+    } else if (p.type === 'reasoning') {
+      if (p.text) {
+        const id = 'reason_' + Math.random().toString(36).slice(2, 8);
+        html += `<details class="thinking-block" id="${id}"><summary>💭 思考过程</summary><div class="thinking-text">${escHtml(p.text)}</div></details>`;
+      }
+    } else if (p.type === 'tool') {
+      const cmd = (p.input || '').slice(0, 200);
+      const desc = p.description || '';
+      const output = p.output || '';
+      const hidden = p.is_hidden;
+      let toolHtml = `<div class="tool-call"><span class="tool-badge">🔧 ${escHtml(p.tool)}</span>`;
+      if (desc) toolHtml += `<span class="tool-desc">${escHtml(desc)}</span>`;
+      if (cmd) toolHtml += `<code class="tool-input">${escHtml(cmd)}</code>`;
+      toolHtml += `</div>`;
+      if (hidden) {
+        toolHtml += `<div class="tool-result-hidden">📎 输出已隐藏</div>`;
+      } else if (output) {
+        const id = 'to_' + Math.random().toString(36).slice(2, 8);
+        const isLong = output.length > 300;
+        const preview = output.slice(0, 300);
+        toolHtml += `<details class="tool-result-block" id="${id}"><summary>📦 输出${isLong ? ' (' + output.length + ' 字节)' : ''}</summary>
+          <pre class="tool-result-content"><code>${escHtml(isLong ? preview + '\n...' : output)}</code></pre></details>`;
+      }
+      html += toolHtml;
+    } else if (p.type === 'tool_result') {
+      if (p.is_hidden) {
+        html += `<div class="tool-result-hidden">📎 ${escHtml(p.tool_name)} — 输出已隐藏</div>`;
+      } else if (p.content) {
+        const id = 'tr_' + Math.random().toString(36).slice(2, 8);
+        const content = typeof p.content === 'string' ? p.content : JSON.stringify(p.content, null, 2);
+        const preview = content.slice(0, 300);
+        const isLong = content.length > 300;
+        html += `<details class="tool-result-block" id="${id}"><summary>📦 ${escHtml(p.tool_name)} 结果${isLong ? ' (' + content.length + ' 字节)' : ''}</summary>
+          <pre class="tool-result-content"><code>${escHtml(isLong ? preview + '\n...' : content)}</code></pre></details>`;
+      }
+    } else if (p.type === 'step-finish') {
+      const tokens = p.tokens || {};
+      html += `<div class="step-meta">⚡ ${tokens.total || 0} tokens · $${(p.cost || 0).toFixed(6)}</div>`;
+    }
+  }
+  return html || '(空)';
+}
+
+// Configure marked with highlight.js
+if (typeof marked !== 'undefined' && typeof hljs !== 'undefined') {
+  marked.setOptions({
+    breaks: true,
+    gfm: true,
+    highlight: function(code, lang) {
+      if (lang && hljs.getLanguage(lang)) {
+        try { return hljs.highlight(code, { language: lang }).value; } catch (e) {}
+      }
+      return code;
+    }
+  });
+}
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  if (typeof marked !== 'undefined') {
+    try {
+      return marked.parse(text);
+    } catch (e) {
+      return escHtml(text);
+    }
+  }
+  // Fallback: escape HTML and preserve newlines
+  return escHtml(text).replace(/\n/g, '<br>');
+}
+
 // ── Sidebar ──
 function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
@@ -225,7 +304,7 @@ async function openSession(id) {
       <div class="msg-avatar">${avatar}</div>
       <div class="msg-body">
         <div class="role-label">${label} · ${m.time_created}</div>
-        <div class="content">${escHtml(m.content) || '(空)'}</div>
+        <div class="content">${renderParts(m.parts)}</div>
         ${metaLine}
       </div>
     </div>`;
@@ -292,7 +371,7 @@ async function sendMessage() {
     <div class="msg-avatar">U</div>
     <div class="msg-body">
       <div class="role-label">你 · 刚刚</div>
-      <div class="content">${escHtml(text)}</div>
+      <div class="content md-content">${renderMarkdown(text)}</div>
     </div>
   </div>`;
 
@@ -301,7 +380,8 @@ async function sendMessage() {
   messagesArea.innerHTML += `<div class="msg assistant streaming" id="${streamId}">
     <div class="msg-avatar">AI</div>
     <div class="msg-body">
-      <div class="role-label">AI · 思考中...</div>
+      <div class="role-label" id="${streamId}_label">AI · 思考中...</div>
+      <div class="tools-inline" id="${streamId}_tools"></div>
       <div class="thinking-content" id="${streamId}_thinking"></div>
       <div class="content" id="${streamId}_text"></div>
       <div class="loading" id="${streamId}_loading" style="padding:10px"><div class="spinner"></div></div>
@@ -332,11 +412,45 @@ async function sendMessage() {
     }
   });
 
+  // Real-time tool use display
+  eventSource.addEventListener('tool_use', (e) => {
+    const toolsEl = document.getElementById(streamId + '_tools');
+    const labelEl = document.getElementById(streamId + '_label');
+    if (toolsEl) {
+      try {
+        const info = JSON.parse(e.data);
+        const toolSpan = document.createElement('span');
+        toolSpan.className = 'tool-chip';
+        toolSpan.textContent = '🔧 ' + info.tool + (info.input ? ': ' + info.input.slice(0, 60) : '');
+        toolsEl.appendChild(toolSpan);
+        messagesArea.scrollTop = messagesArea.scrollHeight;
+      } catch (_) {}
+    }
+    if (labelEl) labelEl.textContent = 'AI · 使用工具...';
+  });
+
+  eventSource.addEventListener('tool_result', (e) => {
+    const labelEl = document.getElementById(streamId + '_label');
+    if (labelEl) labelEl.textContent = 'AI · 处理工具结果...';
+  });
+
+  eventSource.addEventListener('status', (e) => {
+    const labelEl = document.getElementById(streamId + '_label');
+    if (labelEl && e.data === 'step_start') labelEl.textContent = 'AI · 思考中...';
+  });
+
   eventSource.addEventListener('done', (e) => {
     const loading = document.getElementById(streamId + '_loading');
     const msgEl = document.getElementById(streamId);
+    const textEl = document.getElementById(streamId + '_text');
     if (loading) loading.remove();
     if (msgEl) msgEl.classList.remove('streaming');
+    // Re-render accumulated text as markdown
+    if (textEl) {
+      const fullText = textEl.textContent;
+      textEl.innerHTML = renderMarkdown(fullText);
+      textEl.classList.add('md-content');
+    }
     eventSource.close();
     eventSource = null;
     // Re-enable input
@@ -447,7 +561,7 @@ function startNewSession() {
       <div class="msg-avatar">U</div>
       <div class="msg-body">
         <div class="role-label">你 · 刚刚</div>
-        <div class="content">${escHtml(message)}</div>
+        <div class="content md-content">${renderMarkdown(message)}</div>
       </div>
     </div>
     <div class="msg assistant streaming" id="${streamId}">
@@ -506,6 +620,25 @@ function startNewSession() {
             el.textContent += data.replace(/\\n/g, '\n');
             messagesArea.scrollTop = messagesArea.scrollHeight;
           }
+        } else if (eventType === 'tool_use') {
+          const toolsEl = document.getElementById(streamId + '_tools');
+          const labelEl = document.getElementById(streamId + '_label');
+          if (toolsEl) {
+            try {
+              const info = JSON.parse(data);
+              const chip = document.createElement('span');
+              chip.className = 'tool-chip';
+              chip.textContent = '🔧 ' + info.tool + (info.input ? ': ' + info.input.slice(0, 60) : '');
+              toolsEl.appendChild(chip);
+            } catch (_) {}
+          }
+          if (labelEl) labelEl.textContent = 'AI · 使用工具...';
+        } else if (eventType === 'tool_result') {
+          const labelEl = document.getElementById(streamId + '_label');
+          if (labelEl) labelEl.textContent = 'AI · 处理工具结果...';
+        } else if (eventType === 'status') {
+          const labelEl = document.getElementById(streamId + '_label');
+          if (labelEl && data === 'step_start') labelEl.textContent = 'AI · 思考中...';
         } else if (eventType === 'done') {
           const info = JSON.parse(data || '{}');
           const newId = info.session_id;
@@ -824,7 +957,7 @@ async function forkSession() {
     <div class="msg-avatar">U</div>
     <div class="msg-body">
       <div class="role-label">你 · 分叉点</div>
-      <div class="content">${escHtml(message)}</div>
+      <div class="content md-content">${renderMarkdown(message)}</div>
     </div>
   </div>
   <div class="msg assistant streaming" id="${streamId}">
@@ -872,6 +1005,25 @@ async function forkSession() {
         } else if (eventType === 'text') {
           const el = document.getElementById(streamId + '_text');
           if (el) el.textContent += data.replace(/\\n/g, '\n');
+        } else if (eventType === 'tool_use') {
+          const toolsEl = document.getElementById(streamId + '_tools');
+          const labelEl = document.getElementById(streamId + '_label');
+          if (toolsEl) {
+            try {
+              const info = JSON.parse(data);
+              const chip = document.createElement('span');
+              chip.className = 'tool-chip';
+              chip.textContent = '🔧 ' + info.tool + (info.input ? ': ' + info.input.slice(0, 60) : '');
+              toolsEl.appendChild(chip);
+            } catch (_) {}
+          }
+          if (labelEl) labelEl.textContent = 'AI · 使用工具...';
+        } else if (eventType === 'tool_result') {
+          const labelEl = document.getElementById(streamId + '_label');
+          if (labelEl) labelEl.textContent = 'AI · 处理工具结果...';
+        } else if (eventType === 'status') {
+          const labelEl = document.getElementById(streamId + '_label');
+          if (labelEl && data === 'step_start') labelEl.textContent = 'AI · 思考中...';
         } else if (eventType === 'done') {
           const info = JSON.parse(data || '{}');
           newId = info.session_id;
@@ -990,7 +1142,7 @@ function renderCompareView(s1, s2) {
         const roleLabel = msg.role === 'user' ? '你' : msg.role === 'assistant' ? 'AI' : '工具';
         html += `<div class="compare-msg ${msg.role}">
           <div class="role-label">${roleLabel}</div>
-          <div class="content">${escHtml(msg.content) || '(空)'}</div>
+          <div class="content">${renderParts(msg.parts) || '(空)'}</div>
         </div>`;
       } else {
         html += `<div class="compare-msg empty"></div>`;
