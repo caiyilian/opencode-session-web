@@ -259,6 +259,21 @@ async function openSession(id) {
   messagesArea.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   mainTitle.textContent = '加载中...';
 
+  // Add undo button to header immediately (before API call)
+  let undoBtn = document.getElementById('undoHeaderBtn');
+  if (!undoBtn) {
+    undoBtn = document.createElement('span');
+    undoBtn.id = 'undoHeaderBtn';
+    undoBtn.className = 'undo-link';
+    undoBtn.textContent = ' ↩ 撤销上一条';
+    undoBtn.style.marginLeft = '12px';
+    undoBtn.onclick = undoLastAction;
+    // Insert after mainInfo
+    if (mainInfo && mainInfo.parentNode) {
+      mainInfo.parentNode.insertBefore(undoBtn, mainInfo.nextSibling);
+    }
+  }
+
   const data = await api(`/api/sessions/${id}`);
 
   if (data.error) {
@@ -300,30 +315,26 @@ async function openSession(id) {
       metaLine = `<div class="meta-line">&#9889; ${fmtTokens(m.tokens.output)} output</div>`;
     }
 
+    let contentHtml;
+    try {
+      contentHtml = renderParts(m.parts);
+    } catch (_) {
+      contentHtml = '(渲染失败)';
+    }
+
     html += `<div class="msg ${role}">
       <div class="msg-avatar">${avatar}</div>
       <div class="msg-body">
         <div class="role-label">${label} · ${m.time_created}</div>
-        <div class="content">${renderParts(m.parts)}</div>
+        <div class="content">${contentHtml}</div>
         ${metaLine}
+        <div class="undo-link" onclick="undoLastAction()">↩ 撤销</div>
       </div>
     </div>`;
   }
 
   messagesArea.innerHTML = html;
   messagesArea.scrollTop = messagesArea.scrollHeight;
-
-  // Add undo button to header
-  const existingUndo = document.getElementById('undoHeaderBtn');
-  if (!existingUndo) {
-    const undoBtn = document.createElement('span');
-    undoBtn.id = 'undoHeaderBtn';
-    undoBtn.className = 'undo-link';
-    undoBtn.textContent = ' ↩ 撤销上一条';
-    undoBtn.style.marginLeft = '12px';
-    undoBtn.onclick = undoLastAction;
-    mainInfo.parentNode.insertBefore(undoBtn, mainInfo.nextSibling);
-  }
 
   // Show input area (Phase 2)
   inputArea.classList.add('show');
@@ -412,11 +423,27 @@ async function sendMessage() {
   sendBtn.disabled = false;
   sendBtn.onclick = stopGeneration;
 
+  // 30s timeout: if no output received, show error
+  let receivedAny = false;
+  const timeoutTimer = setTimeout(() => {
+    if (!receivedAny) {
+      const labelEl = document.getElementById(streamId + '_label');
+      const loading = document.getElementById(streamId + '_loading');
+      if (labelEl) labelEl.textContent = 'AI · 无响应 (模型可能受限)';
+      if (loading) {
+        loading.innerHTML = '<span style="color:var(--accent3);font-size:12px">⏱ 30 秒无响应，可点击停止后切换模型重试</span>';
+      }
+    }
+  }, 30000);
+  // Clear timeout on any event
+  const clearTimeoutFn = () => { receivedAny = true; clearTimeout(timeoutTimer); };
+
   // Start SSE stream
   const modelParam = currentModel ? '&model=' + encodeURIComponent(currentModel) : '';
   eventSource = new EventSource(`/api/sessions/${currentSessionId}/stream?message=${encodeURIComponent(text)}${modelParam}`);
 
   eventSource.addEventListener('thinking', (e) => {
+    clearTimeoutFn();
     const el = document.getElementById(streamId + '_thinking');
     if (el) {
       let text = el.textContent;
@@ -428,6 +455,7 @@ async function sendMessage() {
   });
 
   eventSource.addEventListener('text', (e) => {
+    clearTimeoutFn();
     const el = document.getElementById(streamId + '_text');
     if (el) {
       el.textContent += e.data.replace(/\\n/g, '\n');
@@ -437,6 +465,7 @@ async function sendMessage() {
 
   // Real-time tool use display
   eventSource.addEventListener('tool_use', (e) => {
+    clearTimeoutFn();
     const toolsEl = document.getElementById(streamId + '_tools');
     const labelEl = document.getElementById(streamId + '_label');
     if (toolsEl) {
@@ -453,16 +482,23 @@ async function sendMessage() {
   });
 
   eventSource.addEventListener('tool_result', (e) => {
+    clearTimeoutFn();
     const labelEl = document.getElementById(streamId + '_label');
     if (labelEl) labelEl.textContent = 'AI · 处理工具结果...';
   });
 
   eventSource.addEventListener('status', (e) => {
+    clearTimeoutFn();
     const labelEl = document.getElementById(streamId + '_label');
-    if (labelEl && e.data === 'step_start') labelEl.textContent = 'AI · 思考中...';
+    if (labelEl) {
+      if (e.data === 'step_start') labelEl.textContent = 'AI · 思考中...';
+      else if (e.data === 'waiting') labelEl.textContent = 'AI · 等待响应...';
+    }
   });
 
   function generationDone() {
+    if (!eventSource) return; // Already done
+    clearTimeoutFn();
     eventSource.close();
     eventSource = null;
     textarea.disabled = false;
@@ -494,13 +530,44 @@ async function sendMessage() {
     generationDone();
   });
 
-  eventSource.addEventListener('error', (e) => {
+  eventSource.addEventListener('stream_error', (e) => {
+    console.log('[DEBUG] stream_error received:', e.data);
     const loading = document.getElementById(streamId + '_loading');
     const msgEl = document.getElementById(streamId);
     if (loading) loading.remove();
     if (msgEl) msgEl.classList.remove('streaming');
+    // 显示后端发送的错误信息
+    let errorMsg = e.data || '未知错误';
+    // 尝试解析 JSON 格式的错误
+    try {
+      const parsed = JSON.parse(errorMsg);
+      if (parsed.message) errorMsg = parsed.message;
+      else if (parsed.error) errorMsg = parsed.error;
+      else if (parsed.name) errorMsg = parsed.name + (parsed.data?.message ? ': ' + parsed.data.message : '');
+    } catch (_) {}
+    const textEl = document.getElementById(streamId + '_text');
+    if (textEl) {
+      textEl.innerHTML = `<div class="error-msg">${escHtml(errorMsg)}</div>`;
+    }
     generationDone();
   });
+
+  // Also listen for connection-level errors (debug + fallback)
+  eventSource.onerror = (e) => {
+    if (!eventSource) return; // Already cleaned up
+    console.log('[DEBUG] EventSource onerror, readyState:', eventSource.readyState);
+    // If the stream_error event didn't show an error message, show a fallback
+    const textEl = document.getElementById(streamId + '_text');
+    const loadingEl = document.getElementById(streamId + '_loading');
+    if (textEl && !textEl.querySelector('.error-msg') && !textEl.textContent.trim()) {
+      // No error message displayed and no text content - show fallback
+      const msgEl = document.getElementById(streamId);
+      if (loadingEl) loadingEl.remove();
+      if (msgEl) msgEl.classList.remove('streaming');
+      textEl.innerHTML = '<div class="error-msg">连接中断，模型可能受限。请切换模型后重试。</div>';
+      generationDone();
+    }
+  };
 }
 
 function stopGeneration() {
@@ -721,7 +788,7 @@ function startNewSession() {
             mainTitle.textContent = '新建会话';
             inputArea.classList.add('show');
           }
-        } else if (eventType === 'error') {
+        } else if (eventType === 'stream_error') {
           const loading = document.getElementById(streamId + '_loading');
           const msgEl = document.getElementById(streamId);
           if (loading) loading.remove();
@@ -1086,7 +1153,7 @@ async function forkSession() {
         } else if (eventType === 'done') {
           const info = JSON.parse(data || '{}');
           newId = info.session_id;
-        } else if (eventType === 'error') {
+        } else if (eventType === 'stream_error') {
           throw new Error(data);
         }
       }
