@@ -29,13 +29,23 @@
       <button class="back-btn" id="backBtn" onclick="showList()">&larr;</button>
       <h2 id="mainTitle">选择一个会话</h2>
       <span class="info" id="mainInfo"></span>
+      <button class="file-btn" id="fileBtn" onclick="toggleFilePanel()" title="浏览工作目录文件">&#128193;</button>
     </div>
     <div class="stats-bar" id="statsBar"></div>
-    <div class="messages" id="messagesArea">
-      <div class="empty-state">
-        <div class="big-icon">&#9670;</div>
-        <h2>OpenCode 会话查看器</h2>
-        <p>从左侧选择一个会话查看对话历史，或使用搜索框快速定位。</p>
+    <div class="main-body">
+      <div class="messages" id="messagesArea">
+        <div class="empty-state">
+          <div class="big-icon">&#9670;</div>
+          <h2>OpenCode 会话查看器</h2>
+          <p>从左侧选择一个会话查看对话历史，或使用搜索框快速定位。</p>
+        </div>
+      </div>
+      <div class="file-panel" id="filePanel">
+        <div class="file-panel-header">
+          <span>&#128193; 文件</span>
+          <span class="file-path" id="filePanelPath"></span>
+        </div>
+        <div class="file-tree" id="fileTree"></div>
       </div>
     </div>
     <!-- Input area (Phase 2) -->

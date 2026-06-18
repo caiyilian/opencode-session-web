@@ -666,6 +666,43 @@ def api_session_new():
     )
 
 
+# ── Phase 2: 文件浏览 ──────────────────────────────────
+
+
+@app.route("/api/files")
+def api_files():
+    """列出指定目录的文件和子目录"""
+    path = request.args.get("path", "").strip()
+    if not path:
+        return jsonify({"error": "path 参数不能为空"}), 400
+
+    # 安全检查：拒绝路径遍历
+    norm = os.path.normpath(path)
+    if not os.path.isdir(norm):
+        return jsonify({"error": "目录不存在"}), 404
+
+    try:
+        entries = []
+        with os.scandir(norm) as it:
+            for entry in sorted(it, key=lambda e: (not e.is_dir(follow_symlinks=False), e.name.lower())):
+                is_dir = entry.is_dir(follow_symlinks=False)
+                stat = entry.stat(follow_symlinks=False)
+                # 跳过隐藏文件/目录（以 . 开头）
+                if entry.name.startswith("."):
+                    continue
+                entries.append({
+                    "name": entry.name,
+                    "type": "dir" if is_dir else "file",
+                    "size": stat.st_size if not is_dir else 0,
+                    "mtime": int(stat.st_mtime),
+                })
+        return jsonify({"path": norm, "entries": entries})
+    except PermissionError:
+        return jsonify({"error": "无权限访问该目录"}), 403
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── 前端页面 ──────────────────────────────────────────────
 
 @app.route("/")

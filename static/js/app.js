@@ -8,6 +8,7 @@ let allSessions = [];
 let allModels = [];       // 可用模型列表
 let currentModel = '';    // 当前选中模型
 let eventSource = null;
+let currentDirectory = '';  // 当前会话的工作目录
 
 // ── API ──
 async function api(path) {
@@ -177,6 +178,7 @@ async function openSession(id) {
   }
 
   const s = data.session;
+  currentDirectory = s.directory || '';
   mainTitle.textContent = s.title || '未命名会话';
   mainInfo.textContent = `${s.model} · ${data.message_count} 条消息`;
 
@@ -225,6 +227,9 @@ async function openSession(id) {
   // Show input area (Phase 2)
   inputArea.classList.add('show');
 
+  // Show file button
+  document.getElementById('fileBtn').style.display = 'block';
+
   // Show back button on mobile
   if (window.innerWidth <= 768) {
     backBtn.style.display = 'block';
@@ -244,6 +249,10 @@ function showList() {
   document.getElementById('backBtn').style.display = 'none';
   document.getElementById('sessionList').innerHTML = '';
   document.getElementById('inputArea').classList.remove('show');
+  document.getElementById('fileBtn').style.display = 'none';
+  document.getElementById('filePanel').classList.remove('show');
+  document.getElementById('fileBtn').classList.remove('active');
+  filePanelOpen = false;
   renderSidebar();
 }
 
@@ -524,4 +533,113 @@ function startNewSession() {
     messagesArea.innerHTML += `<div class="empty-state"><p style="color:var(--accent3)">错误: ${escHtml(err.message)}</p></div>`;
     submitBtn.disabled = false;
   });
+}
+
+// ── Phase 2: File tree ──
+
+let filePanelOpen = false;
+
+function toggleFilePanel() {
+  filePanelOpen = !filePanelOpen;
+  const panel = document.getElementById('filePanel');
+  const btn = document.getElementById('fileBtn');
+  panel.classList.toggle('show', filePanelOpen);
+  btn.classList.toggle('active', filePanelOpen);
+  if (filePanelOpen && currentDirectory) {
+    loadFileTree(currentDirectory);
+  }
+}
+
+async function loadFileTree(dirPath) {
+  const tree = document.getElementById('fileTree');
+  const pathLabel = document.getElementById('filePanelPath');
+  pathLabel.textContent = dirPath;
+  tree.innerHTML = '<div class="file-entry loading">加载中...</div>';
+
+  try {
+    const data = await api('/api/files?path=' + encodeURIComponent(dirPath));
+    if (data.error) {
+      tree.innerHTML = `<div class="file-entry loading">${escHtml(data.error)}</div>`;
+      return;
+    }
+    renderFileEntries(tree, data.entries, dirPath);
+  } catch (e) {
+    tree.innerHTML = `<div class="file-entry loading">加载失败: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function renderFileEntries(container, entries, basePath) {
+  let html = '';
+  for (const e of entries) {
+    const icon = e.type === 'dir' ? '📁' : getFileIcon(e.name);
+    const sizeStr = e.type === 'file' ? fmtFileSize(e.size) : '';
+    if (e.type === 'dir') {
+      const childId = 'fl_' + basePath.replace(/[^a-zA-Z0-9]/g, '_') + '_' + e.name.replace(/[^a-zA-Z0-9]/g, '_');
+      html += `<div class="file-entry dir" onclick="toggleDir(this, '${childId}', '${escHtmlAttr(basePath + '/' + e.name)}')">
+        <span class="arrow" id="arr_${childId}">▶</span>
+        <span class="icon">${icon}</span>
+        <span class="name">${escHtml(e.name)}</span>
+      </div>
+      <div class="file-children" id="${childId}"></div>`;
+    } else {
+      html += `<div class="file-entry" title="${escHtmlAttr(basePath + '/' + e.name)}">
+        <span class="icon">${icon}</span>
+        <span class="name">${escHtml(e.name)}</span>
+        <span class="file-size">${sizeStr}</span>
+      </div>`;
+    }
+  }
+  container.innerHTML = html;
+}
+
+async function toggleDir(el, childId, fullPath) {
+  const arrow = document.getElementById('arr_' + childId);
+  const children = document.getElementById(childId);
+  if (children.classList.contains('show')) {
+    children.classList.remove('show');
+    arrow.classList.remove('open');
+    return;
+  }
+  arrow.classList.add('open');
+  if (children.children.length === 0) {
+    children.innerHTML = '<div class="file-entry loading">加载中...</div>';
+    try {
+      const data = await api('/api/files?path=' + encodeURIComponent(fullPath));
+      if (data.error) {
+        children.innerHTML = `<div class="file-entry loading">${escHtml(data.error)}</div>`;
+        return;
+      }
+      renderFileEntries(children, data.entries, fullPath);
+    } catch (e) {
+      children.innerHTML = `<div class="file-entry loading">加载失败</div>`;
+    }
+  }
+  children.classList.add('show');
+}
+
+function getFileIcon(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  const icons = {
+    js: '📜', ts: '📘', py: '🐍', rs: '🦀', go: '🔵',
+    java: '☕', cpp: '⚙️', c: '⚙️', h: '⚙️', hpp: '⚙️',
+    html: '🌐', css: '🎨', scss: '🎨', json: '📋', yml: '📋', yaml: '📋',
+    md: '📝', txt: '📄', xml: '📋', toml: '📋',
+    png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', svg: '🖼️',
+    zip: '📦', tar: '📦', gz: '📦', 7z: '📦',
+    gitignore: '🙈', dockerfile: '🐳',
+  };
+  return icons[ext] || '📄';
+}
+
+function escHtmlAttr(s) {
+  if (!s) return '';
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function fmtFileSize(bytes) {
+  if (!bytes) return '';
+  if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB';
+  if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+  if (bytes >= 1024) return (bytes / 1024).toFixed(0) + ' KB';
+  return bytes + ' B';
 }
