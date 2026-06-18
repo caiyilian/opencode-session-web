@@ -395,6 +395,25 @@ def api_models():
     return jsonify({"models": [{"name": format_model(r["model"]), "count": r["cnt"]} for r in rows]})
 
 
+@app.route("/api/available-models")
+def api_available_models():
+    """获取所有可用模型列表（来自 opencode CLI）"""
+    try:
+        result = subprocess.run(
+            ["opencode", "models"],
+            capture_output=True, text=True, encoding="utf-8",
+            timeout=30,
+        )
+        models = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        return jsonify({"models": models})
+    except FileNotFoundError:
+        return jsonify({"error": "opencode CLI 未找到"}), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "获取模型列表超时"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── Phase 2: SSE 流式输出 ──────────────────────────────
 
 @app.after_request
@@ -416,6 +435,8 @@ def api_session_stream(session_id):
     if not message:
         return jsonify({"error": "消息不能为空"}), 400
 
+    model = request.args.get("model", "").strip()
+
     # 从 DB 读取会话信息，获取工作目录
     conn = get_db()
     row = conn.execute("SELECT directory FROM session WHERE id = ?", (session_id,)).fetchone()
@@ -435,6 +456,9 @@ def api_session_stream(session_id):
                 message,
                 "--format", "json",
             ]
+            if model:
+                cmd.insert(2, "-m")
+                cmd.insert(3, model)
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -519,6 +543,7 @@ def api_session_new():
     data = request.get_json(silent=True) or {}
     directory = (data.get("directory") or "").strip()
     message = (data.get("message") or "").strip()
+    model = (data.get("model") or "").strip()
 
     if not message:
         return jsonify({"error": "消息不能为空"}), 400
@@ -535,6 +560,9 @@ def api_session_new():
                 message,
                 "--format", "json",
             ]
+            if model:
+                cmd.insert(2, "-m")
+                cmd.insert(3, model)
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,

@@ -5,6 +5,8 @@ let sessions = [];
 let currentSessionId = null;
 let allDirectories = [];
 let allSessions = [];
+let allModels = [];       // 可用模型列表
+let currentModel = '';    // 当前选中模型
 let eventSource = null;
 
 // ── API ──
@@ -44,7 +46,34 @@ async function init() {
   allSessions = sessData.sessions;
   sessions = allSessions;
 
+  // Load available models
+  try {
+    const modelsData = await api('/api/available-models');
+    if (modelsData.models) {
+      allModels = modelsData.models;
+      populateModelSelectors();
+    }
+  } catch (e) {
+    // 静默失败，模型切换功能不可用
+  }
+
   renderSidebar();
+}
+
+function populateModelSelectors() {
+  // Populate all model <select> elements
+  const selects = document.querySelectorAll('.model-select');
+  for (const sel of selects) {
+    const current = sel.value;
+    sel.innerHTML = '<option value="">默认模型</option>';
+    for (const m of allModels) {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      if (m === current) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  }
 }
 
 // ── Render sidebar ──
@@ -151,6 +180,25 @@ async function openSession(id) {
   mainTitle.textContent = s.title || '未命名会话';
   mainInfo.textContent = `${s.model} · ${data.message_count} 条消息`;
 
+  // 设置模型选择器
+  currentModel = s.model;
+  const modelSelect = document.getElementById('modelSelect');
+  if (modelSelect) {
+    // 看当前模型在不在列表中
+    let found = false;
+    for (const opt of modelSelect.options) {
+      if (opt.value === s.model) { opt.selected = true; found = true; break; }
+    }
+    if (!found) {
+      // 不在列表中则添加一个选项
+      const opt = document.createElement('option');
+      opt.value = s.model;
+      opt.textContent = s.model + ' (当前)';
+      opt.selected = true;
+      modelSelect.appendChild(opt);
+    }
+  }
+
   let html = '';
   for (const m of data.messages) {
     const role = m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : 'tool';
@@ -241,7 +289,8 @@ async function sendMessage() {
   messagesArea.scrollTop = messagesArea.scrollHeight;
 
   // Start SSE stream
-  eventSource = new EventSource(`/api/sessions/${currentSessionId}/stream?message=${encodeURIComponent(text)}`);
+  const modelParam = currentModel ? '&model=' + encodeURIComponent(currentModel) : '';
+  eventSource = new EventSource(`/api/sessions/${currentSessionId}/stream?message=${encodeURIComponent(text)}${modelParam}`);
 
   eventSource.addEventListener('thinking', (e) => {
     const el = document.getElementById(streamId + '_thinking');
@@ -392,10 +441,11 @@ function startNewSession() {
   messagesArea.scrollTop = messagesArea.scrollHeight;
 
   // Send POST via fetch + EventSource doesn't support POST, so use fetch with streaming
+  const modelParam = currentModel ? '&model=' + encodeURIComponent(currentModel) : '';
   fetch('/api/sessions/new', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ directory, message }),
+    body: JSON.stringify({ directory, message, model: currentModel || undefined }),
   }).then(async (response) => {
     if (!response.ok) {
       const err = await response.json();
