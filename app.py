@@ -568,7 +568,6 @@ def run_opencode_stream(cmd, session_id, timeout=600):
     stdout_thread.start()
 
     has_json_output = False
-    last_stderr_check = 0
     try:
         while True:
             try:
@@ -618,15 +617,9 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                     tokens = part.get("tokens", {})
                     yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
             except json.JSONDecodeError:
-                # 非 JSON 行：收集为错误信息
-                if not has_json_output:
-                    error_lines.append(line)
+                pass
 
         proc.wait(timeout=timeout)
-
-        if not has_json_output and error_lines:
-            err_text = "\n".join(error_lines[-10:])
-            yield f"event: error\ndata: {err_text[:500]}\n\n"
 
     except GeneratorExit:
         try: proc.kill()
