@@ -230,6 +230,7 @@ async function openSession(id) {
 
   // Show file button
   document.getElementById('fileBtn').style.display = 'block';
+  document.getElementById('forkBtn').style.display = 'block';
 
   // Show back button on mobile
   if (window.innerWidth <= 768) {
@@ -251,6 +252,7 @@ function showList() {
   document.getElementById('sessionList').innerHTML = '';
   document.getElementById('inputArea').classList.remove('show');
   document.getElementById('fileBtn').style.display = 'none';
+  document.getElementById('forkBtn').style.display = 'none';
   document.getElementById('filePanel').classList.remove('show');
   document.getElementById('fileBtn').classList.remove('active');
   filePanelOpen = false;
@@ -787,4 +789,112 @@ function renderOverview(data) {
       <div class="stat-sub">30 天内</div>
     </div>
   `;
+}
+
+// ── Phase 3: Fork session ──
+
+async function forkSession() {
+  if (!currentSessionId) return;
+  const message = prompt('输入分叉后的第一条消息（Fork 后将创建新会话）：');
+  if (!message) return;
+
+  const submitBtn = document.getElementById('sendBtn');
+  const textarea = document.getElementById('msgInput');
+  submitBtn.disabled = true;
+
+  const streamId = 'fork_' + Date.now();
+  const messagesArea = document.getElementById('messagesArea');
+  const inputArea = document.getElementById('inputArea');
+  const mainTitle = document.getElementById('mainTitle');
+  const mainInfo = document.getElementById('mainInfo');
+
+  mainTitle.textContent = '分叉中...';
+  inputArea.classList.remove('show');
+
+  messagesArea.innerHTML += `<div class="msg user">
+    <div class="msg-avatar">U</div>
+    <div class="msg-body">
+      <div class="role-label">你 · 分叉点</div>
+      <div class="content">${escHtml(message)}</div>
+    </div>
+  </div>
+  <div class="msg assistant streaming" id="${streamId}">
+    <div class="msg-avatar">AI</div>
+    <div class="msg-body">
+      <div class="role-label">AI · 分叉中...</div>
+      <div class="thinking-content" id="${streamId}_thinking"></div>
+      <div class="content" id="${streamId}_text"></div>
+      <div class="loading" id="${streamId}_loading" style="padding:10px"><div class="spinner"></div></div>
+    </div>
+  </div>`;
+  messagesArea.scrollTop = messagesArea.scrollHeight;
+
+  try {
+    const response = await fetch(`/api/sessions/${currentSessionId}/fork`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, model: currentModel || undefined }),
+    });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || '分叉失败');
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let newId = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop() || '';
+      for (const block of events) {
+        const lines = block.split('\n');
+        let eventType = '', data = '';
+        for (const line of lines) {
+          if (line.startsWith('event: ')) eventType = line.slice(7);
+          else if (line.startsWith('data: ')) data = line.slice(6);
+        }
+        if (eventType === 'thinking') {
+          const el = document.getElementById(streamId + '_thinking');
+          if (el && el.textContent.length < 2000) el.textContent += data.replace(/\\n/g, '\n');
+        } else if (eventType === 'text') {
+          const el = document.getElementById(streamId + '_text');
+          if (el) el.textContent += data.replace(/\\n/g, '\n');
+        } else if (eventType === 'done') {
+          const info = JSON.parse(data || '{}');
+          newId = info.session_id;
+        } else if (eventType === 'error') {
+          throw new Error(data);
+        }
+      }
+    }
+
+    // End streaming
+    const loading = document.getElementById(streamId + '_loading');
+    const msgEl = document.getElementById(streamId);
+    if (loading) loading.remove();
+    if (msgEl) msgEl.classList.remove('streaming');
+
+    if (newId) {
+      // Refresh and navigate to new session
+      currentSessionId = newId;
+      const sessData = await api('/api/sessions?limit=200');
+      allSessions = sessData.sessions;
+      sessions = allSessions;
+      renderSidebar();
+      openSession(newId);
+    } else {
+      inputArea.classList.add('show');
+      mainTitle.textContent = '分叉完成';
+    }
+  } catch (e) {
+    const loading = document.getElementById(streamId + '_loading');
+    if (loading) loading.remove();
+    messagesArea.innerHTML += `<div class="empty-state"><p style="color:var(--accent3)">错误: ${escHtml(e.message)}</p></div>`;
+  } finally {
+    submitBtn.disabled = false;
+  }
 }
