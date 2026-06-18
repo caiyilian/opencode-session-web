@@ -221,6 +221,71 @@ def api_sessions():
     return jsonify({"sessions": sessions, "total": total})
 
 
+# ── Phase 3: 会话对比 ──────────────────────────────────
+
+
+@app.route("/api/sessions/compare")
+def api_sessions_compare():
+    """对比两个会话的消息"""
+    id1 = request.args.get("id1", "").strip()
+    id2 = request.args.get("id2", "").strip()
+    if not id1 or not id2:
+        return jsonify({"error": "需要 id1 和 id2 参数"}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    def load_session(sid):
+        row = cursor.execute("SELECT * FROM session WHERE id = ?", (sid,)).fetchone()
+        if not row:
+            return None
+        s = dict(row)
+        msgs = cursor.execute(
+            "SELECT m.id, m.time_created, m.data FROM message m WHERE m.session_id = ? ORDER BY m.time_created ASC",
+            (sid,),
+        ).fetchall()
+        msg_list = []
+        for m in msgs:
+            try:
+                data = json.loads(m["data"])
+            except (json.JSONDecodeError, TypeError):
+                data = {}
+            role = data.get("role", "unknown")
+            content = data.get("content") or data.get("text", "")
+            if isinstance(content, list):
+                texts = [p.get("text", "") if isinstance(p, dict) else str(p) for p in content]
+                content = "\n".join(texts)
+            msg_list.append({
+                "id": m["id"],
+                "role": role,
+                "content": content[:500],
+                "time": m["time_created"],
+            })
+        return {
+            "id": s["id"],
+            "title": s["title"],
+            "model": format_model(s.get("model", "")),
+            "directory": s["directory"],
+            "project": get_project_name(s["directory"]),
+            "messages": msg_list,
+            "message_count": len(msg_list),
+            "tokens_input": s.get("tokens_input", 0),
+            "tokens_output": s.get("tokens_output", 0),
+            "cost": s.get("cost", 0),
+        }
+
+    s1 = load_session(id1)
+    s2 = load_session(id2)
+    conn.close()
+
+    if not s1:
+        return jsonify({"error": f"会话 {id1} 不存在"}), 404
+    if not s2:
+        return jsonify({"error": f"会话 {id2} 不存在"}), 404
+
+    return jsonify({"session1": s1, "session2": s2})
+
+
 @app.route("/api/sessions/<session_id>")
 def api_session_detail(session_id):
     """获取单个会话详情"""

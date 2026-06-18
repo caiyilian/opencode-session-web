@@ -9,6 +9,8 @@ let allModels = [];       // 可用模型列表
 let currentModel = '';    // 当前选中模型
 let eventSource = null;
 let currentDirectory = '';  // 当前会话的工作目录
+let compareMode = false;    // 对比模式
+let compareIds = [];        // 选中的对比会话 ID 列表
 
 // ── API ──
 async function api(path) {
@@ -37,7 +39,12 @@ async function init() {
     <span>&#9889; Output <span class="num">${fmtTokens(stats.total_tokens_output)}</span></span>
     <button class="stats-btn" id="statsBtn" onclick="toggleStatsPanel()">&#128202; 详细统计</button>
   `;
-  document.getElementById('statsFooter').textContent = `共 ${stats.total_sessions} 个会话 · ${stats.total_projects} 个项目`;
+  document.getElementById('statsFooter').innerHTML = `
+    <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+      <span>共 ${stats.total_sessions} 个会话</span>
+      <button class="compare-btn" id="compareBtn" onclick="toggleCompareMode()">&#128196; 对比</button>
+    </div>
+  `;
 
   // Load directories
   const dirsData = await api('/api/directories');
@@ -119,8 +126,10 @@ function renderSidebar() {
       <div id="${gid}">`;
     for (const s of g.sessions) {
       const active = s.id === currentSessionId ? 'active' : '';
-      html += `<div class="session-item ${active}" onclick="openSession('${s.id}')">
-        <div class="title">${escHtml(s.title)}</div>
+      const checked = compareIds.includes(s.id) ? 'checked' : '';
+      const cb = compareMode ? `<input type="checkbox" class="compare-cb" ${checked} onchange="toggleCompareSelect('${s.id}', this)" onclick="event.stopPropagation()"> ` : '';
+      html += `<div class="session-item ${active}" onclick="${compareMode ? 'toggleCompareSelect(\'' + s.id + '\', this.querySelector(\'.compare-cb\'))' : 'openSession(\'' + s.id + '\')'}">
+        ${cb}<div class="title">${escHtml(s.title)}</div>
         <div class="meta">
           <span class="model">${s.model}</span>
           <span class="time">${s.time_updated}</span>
@@ -897,4 +906,102 @@ async function forkSession() {
   } finally {
     submitBtn.disabled = false;
   }
+}
+
+// ── Phase 3: Compare sessions ──
+
+function toggleCompareMode() {
+  compareMode = !compareMode;
+  compareIds = [];
+  document.getElementById('compareBtn').classList.toggle('active', compareMode);
+  renderSidebar();
+  if (compareMode) {
+    document.getElementById('mainTitle').textContent = '选择两个会话进行对比';
+    document.getElementById('messagesArea').innerHTML = `<div class="empty-state"><p>在左侧勾选两个会话，然后点击「开始对比」</p></div>`;
+    document.getElementById('inputArea').classList.remove('show');
+    document.getElementById('fileBtn').style.display = 'none';
+    document.getElementById('forkBtn').style.display = 'none';
+    document.getElementById('backBtn').style.display = 'block';
+  } else {
+    showList();
+  }
+}
+
+function toggleCompareSelect(id, cb) {
+  if (cb && cb.checked !== undefined) {
+    if (cb.checked) {
+      if (compareIds.length >= 2) {
+        cb.checked = false;
+        return;
+      }
+      compareIds.push(id);
+    } else {
+      compareIds = compareIds.filter(i => i !== id);
+    }
+  }
+  renderSidebar();
+  if (compareIds.length === 2) {
+    doCompare();
+  }
+}
+
+async function doCompare() {
+  const id1 = compareIds[0], id2 = compareIds[1];
+  const messagesArea = document.getElementById('messagesArea');
+  messagesArea.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+  try {
+    const data = await api(`/api/sessions/compare?id1=${encodeURIComponent(id1)}&id2=${encodeURIComponent(id2)}`);
+    if (data.error) {
+      messagesArea.innerHTML = `<div class="empty-state"><p>${escHtml(data.error)}</p></div>`;
+      return;
+    }
+    renderCompareView(data.session1, data.session2);
+  } catch (e) {
+    messagesArea.innerHTML = `<div class="empty-state"><p>对比失败: ${escHtml(e.message)}</p></div>`;
+  }
+}
+
+function renderCompareView(s1, s2) {
+  const messagesArea = document.getElementById('messagesArea');
+  document.getElementById('mainTitle').textContent = '会话对比';
+  document.getElementById('mainInfo').textContent = '';
+
+  // Prepare messages aligned
+  const maxLen = Math.max(s1.messages.length, s2.messages.length);
+
+  let html = `<div class="compare-header">
+    <div class="compare-col">
+      <div class="compare-title">${escHtml(s1.title)}</div>
+      <div class="compare-meta">${s1.model} · ${s1.message_count} 条 · ${fmtTokens(s1.tokens_input + s1.tokens_output)} tokens</div>
+    </div>
+    <div class="compare-col">
+      <div class="compare-title">${escHtml(s2.title)}</div>
+      <div class="compare-meta">${s2.model} · ${s2.message_count} 条 · ${fmtTokens(s2.tokens_input + s2.tokens_output)} tokens</div>
+    </div>
+  </div>`;
+
+  for (let i = 0; i < maxLen; i++) {
+    const msg1 = i < s1.messages.length ? s1.messages[i] : null;
+    const msg2 = i < s2.messages.length ? s2.messages[i] : null;
+    html += `<div class="compare-row">`;
+    for (const msg of [msg1, msg2]) {
+      if (msg) {
+        const roleLabel = msg.role === 'user' ? '你' : msg.role === 'assistant' ? 'AI' : '工具';
+        html += `<div class="compare-msg ${msg.role}">
+          <div class="role-label">${roleLabel}</div>
+          <div class="content">${escHtml(msg.content) || '(空)'}</div>
+        </div>`;
+      } else {
+        html += `<div class="compare-msg empty"></div>`;
+      }
+    }
+    html += `</div>`;
+  }
+
+  html += `<div style="padding:12px;text-align:center;color:var(--text-dim);font-size:12px">
+    Token 消耗: S1=${fmtTokens(s1.tokens_input + s1.tokens_output)} | S2=${fmtTokens(s2.tokens_input + s2.tokens_output)} | 费用: $${s1.cost?.toFixed(4) || '0'} / $${s2.cost?.toFixed(4) || '0'}
+  </div>`;
+
+  messagesArea.innerHTML = html;
 }
