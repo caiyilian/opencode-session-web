@@ -21,11 +21,23 @@ OpenCode 会话 Web 查看器 —— 在浏览器中浏览和管理本地的 Ope
 pip install flask
 ```
 
+或者用 uv（推荐，自动使用 Python 3.13）：
+
+```bash
+uv venv
+uv pip install flask
+```
+
 ### 2. 启动服务
 
 ```bash
 cd opencode-session-web
+
+# 直接用系统 Python
 python app.py 8765
+
+# 或用 uv 环境
+uv run python app.py 8765
 ```
 
 ### 3. 打开浏览器
