@@ -246,10 +246,9 @@ async function sendMessage() {
   eventSource.addEventListener('thinking', (e) => {
     const el = document.getElementById(streamId + '_thinking');
     if (el) {
-      // Keep growing the thinking content
       let text = el.textContent;
       if (text.length < 2000) {
-        el.textContent = text + e.data;
+        el.textContent = text + e.data.replace(/\\n/g, '\n');
       }
       messagesArea.scrollTop = messagesArea.scrollHeight;
     }
@@ -258,7 +257,7 @@ async function sendMessage() {
   eventSource.addEventListener('text', (e) => {
     const el = document.getElementById(streamId + '_text');
     if (el) {
-      el.textContent += e.data;
+      el.textContent += e.data.replace(/\\n/g, '\n');
       messagesArea.scrollTop = messagesArea.scrollHeight;
     }
   });

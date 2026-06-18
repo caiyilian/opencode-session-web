@@ -6,9 +6,10 @@ OpenCode 会话 Web 查看器 — Flask 后端
 
 import json
 import os
+import subprocess
 import sqlite3
 from pathlib import Path
-from flask import Flask, jsonify, request, render_template, send_from_directory
+from flask import Flask, jsonify, request, render_template, Response, stream_with_context
 
 app = Flask(__name__)
 
@@ -394,6 +395,117 @@ def api_models():
     return jsonify({"models": [{"name": format_model(r["model"]), "count": r["cnt"]} for r in rows]})
 
 
+# ── Phase 2: SSE 流式输出 ──────────────────────────────
+
+@app.after_request
+def add_cors_headers(response):
+    """为 SSE 端点添加 CORS 和缓存控制头"""
+    response.headers.setdefault("Cache-Control", "no-cache")
+    return response
+
+
+@app.route("/api/sessions/<session_id>/stream")
+def api_session_stream(session_id):
+    """SSE 流式继续对话
+
+    从 DB 读取会话的工作目录，调用
+    `opencode run --dir <directory> -s <session_id> <message> --format json`
+    将 JSON 事件流转换为 SSE 事件推送到前端。
+    """
+    message = request.args.get("message", "").strip()
+    if not message:
+        return jsonify({"error": "消息不能为空"}), 400
+
+    # 从 DB 读取会话信息，获取工作目录
+    conn = get_db()
+    row = conn.execute("SELECT directory FROM session WHERE id = ?", (session_id,)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "会话不存在"}), 404
+
+    directory = row["directory"]
+
+    def generate():
+        proc = None
+        try:
+            cmd = [
+                "opencode", "run",
+                "--dir", directory,
+                "-s", session_id,
+                message,
+                "--format", "json",
+            ]
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                stdin=subprocess.DEVNULL,
+            )
+
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                    event_type = event.get("type", "")
+                    part = event.get("part", {})
+
+                    if event_type == "text":
+                        text = part.get("text", "")
+                        if text:
+                            # SSE data 中不能包含换行符，替换为 \n 文本
+                            safe_text = text.replace("\n", "\\n")
+                            yield f"event: text\ndata: {safe_text}\n\n"
+
+                    elif event_type == "reasoning" or part.get("type") == "reasoning":
+                        text = part.get("text", event.get("text", ""))
+                        if text:
+                            safe_text = text.replace("\n", "\\n")
+                            yield f"event: thinking\ndata: {safe_text}\n\n"
+
+                    elif event_type == "step_finish":
+                        tokens = part.get("tokens", {})
+                        result = json.dumps({
+                            "session_id": session_id,
+                            "tokens": tokens,
+                            "cost": part.get("cost", 0),
+                        })
+                        yield f"event: done\ndata: {result}\n\n"
+
+                except json.JSONDecodeError:
+                    pass
+
+            # 等待子进程结束
+            if proc:
+                proc.wait(timeout=600)
+
+        except FileNotFoundError:
+            yield f"event: error\ndata: opencode CLI 未找到，请确认已安装 opencode\n\n"
+        except subprocess.TimeoutExpired:
+            if proc:
+                proc.kill()
+            yield "event: error\ndata: 请求超时\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {str(e)}\n\n"
+        finally:
+            # 确保最终发送 done 事件
+            yield f"event: done\ndata: {json.dumps({'session_id': session_id})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
 # ── 前端页面 ──────────────────────────────────────────────
 
 @app.route("/")
@@ -418,4 +530,4 @@ if __name__ == "__main__":
     print(f"  地址:   http://127.0.0.1:{port}")
     print(f"  {'=' * 40}")
 
-    app.run(host="127.0.0.1", port=port, debug=False)
+    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
