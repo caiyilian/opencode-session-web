@@ -750,20 +750,44 @@ def api_session_new():
 
             # stderr 收集线程
             stderr_lines = []
-            def read_stderr():
+            stderr_lock2 = threading.Lock()
+            def read_stderr2():
                 for line in proc.stderr:
                     line = line.strip()
                     if line:
-                        stderr_lines.append(line)
-            stderr_thread = threading.Thread(target=read_stderr, daemon=True)
-            stderr_thread.start()
+                        with stderr_lock2:
+                            stderr_lines.append(line)
+            stderr_thread2 = threading.Thread(target=read_stderr2, daemon=True)
+            stderr_thread2.start()
 
+            # 用队列实现带超时的 stdout 读取
+            stdout_queue2 = queue.Queue()
+            def read_stdout2():
+                for line in proc.stdout:
+                    stdout_queue2.put(line)
+                stdout_queue2.put(None)
+            stdout_thread2 = threading.Thread(target=read_stdout2, daemon=True)
+            stdout_thread2.start()
+
+            new_session_id = None
             has_output = False
-            for line in proc.stdout:
+            while True:
+                try:
+                    line = stdout_queue2.get(timeout=8)
+                except queue.Empty:
+                    with stderr_lock2:
+                        if stderr_lines:
+                            err_text = "\n".join(stderr_lines[-5:])
+                            proc.kill()
+                            yield f"event: error\ndata: {err_text[:500]}\n\n"
+                            return
+                    continue
+                if line is None:
+                    break
+                has_output = True
                 line = line.strip()
                 if not line:
                     continue
-                has_output = True
                 try:
                     ev = json.loads(line)
                     # 捕获新 session ID
@@ -983,18 +1007,41 @@ def api_session_fork(session_id):
             )
 
             stderr_lines = []
+            stderr_lock3 = threading.Lock()
             def rs():
                 for line in proc.stderr:
                     line = line.strip()
-                    if line: stderr_lines.append(line)
+                    if line:
+                        with stderr_lock3:
+                            stderr_lines.append(line)
             stderr_thread = threading.Thread(target=rs, daemon=True)
             stderr_thread.start()
 
+            stdout_queue3 = queue.Queue()
+            def read_stdout3():
+                for line in proc.stdout:
+                    stdout_queue3.put(line)
+                stdout_queue3.put(None)
+            stdout_thread3 = threading.Thread(target=read_stdout3, daemon=True)
+            stdout_thread3.start()
+
             has_output = False
-            for line in proc.stdout:
+            while True:
+                try:
+                    line = stdout_queue3.get(timeout=8)
+                except queue.Empty:
+                    with stderr_lock3:
+                        if stderr_lines:
+                            err_text = "\n".join(stderr_lines[-5:])
+                            proc.kill()
+                            yield f"event: error\ndata: {err_text[:500]}\n\n"
+                            return
+                    continue
+                if line is None:
+                    break
+                has_output = True
                 line = line.strip()
                 if not line: continue
-                has_output = True
                 try:
                     ev = json.loads(line)
                     if not new_session_id and "sessionID" in ev:
