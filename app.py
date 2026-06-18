@@ -37,6 +37,13 @@ def dict_from_row(row):
     return dict(row)
 
 
+def safe_truncate(text, max_len=500):
+    """安全截断文本，确保返回字符串"""
+    if text is None:
+        return ""
+    return str(text)[:max_len]
+
+
 def get_project_name(directory: str) -> str:
     """从目录路径中提取项目名"""
     parts = directory.replace("\\", "/").rstrip("/").split("/")
@@ -538,6 +545,8 @@ def run_opencode_stream(cmd, session_id, timeout=600):
     - stderr 中的内容 → 如果没有 stdout 输出则作为 error 事件发送
     - 进程异常退出时发送 stderr 内容
     """
+    import sys
+    print(f"[DEBUG] run_opencode_stream called, cmd={cmd}", file=sys.stderr, flush=True)
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -547,14 +556,17 @@ def run_opencode_stream(cmd, session_id, timeout=600):
         errors="replace",
         stdin=subprocess.DEVNULL,
     )
+    print(f"[DEBUG] proc started, pid={proc.pid}", file=sys.stderr, flush=True)
 
     # 收集 stderr 的线程（stderr 无缓冲，Node 的 console.error 立即到达）
     stderr_lines = []
+    stderr_lock = threading.Lock()
     def read_stderr():
         for line in proc.stderr:
             line = line.strip()
             if line:
-                stderr_lines.append(line)
+                with stderr_lock:
+                    stderr_lines.append(line)
     stderr_thread = threading.Thread(target=read_stderr, daemon=True)
     stderr_thread.start()
 
@@ -568,18 +580,48 @@ def run_opencode_stream(cmd, session_id, timeout=600):
     stdout_thread.start()
 
     has_json_output = False
+    RATE_LIMIT_KEYWORDS = ["rate limit", "quota", "exceeded", "too many", "retry-after",
+                           "free usage", "subscribe", "retrying in", "429"]
+    last_output_time = time.time()
+    loop_count = 0
     try:
         while True:
+            loop_count += 1
             try:
                 line = stdout_queue.get(timeout=5)
             except queue.Empty:
-                # 每 5 秒检查一次 stderr
-                if stderr_lines and not has_json_output:
+                elapsed = int(time.time() - last_output_time)
+                # 每 5 秒无 stdout 输出时，检查 stderr
+                with stderr_lock:
+                    recent_stderr = list(stderr_lines[-10:])
+                    stderr_count = len(stderr_lines)
+                print(f"[DEBUG] 5s timeout #{loop_count}: has_json={has_json_output} total_stderr={stderr_count} elapsed={elapsed}s proc_alive={proc.poll() is None}", file=sys.stderr, flush=True)
+                if recent_stderr:
+                    combined = "\n".join(recent_stderr).lower()
+                    is_rate_limit = any(kw in combined for kw in RATE_LIMIT_KEYWORDS)
+                    print(f"[DEBUG] stderr content: {recent_stderr[-1][:200]}", file=sys.stderr, flush=True)
+                    if is_rate_limit:
+                        try: proc.kill()
+                        except: pass
+                        err_text = "\n".join(recent_stderr[-5:])
+                        yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
+                        return
+                    if not has_json_output:
+                        try: proc.kill()
+                        except: pass
+                        err_text = "\n".join(recent_stderr[-5:])
+                        yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
+                        return
+                # 无任何输出超过 25 秒，终止（比前端 30 秒超时早）
+                if elapsed > 25:
                     try: proc.kill()
                     except: pass
-                    err_text = "\n".join(stderr_lines[-5:])
-                    yield f"event: error\ndata: {err_text[:500]}\n\n"
+                    err_msg = "模型无响应（可能已达到使用限制），请切换模型后重试"
+                    print(f"[DEBUG] killing proc after {elapsed}s of silence", file=sys.stderr, flush=True)
+                    yield f"event: stream_error\ndata: {err_msg}\n\n"
                     return
+                # 发送状态事件，防止前端 30 秒超时
+                yield f"event: status\ndata: waiting\n\n"
                 continue
             if line is None:
                 break
@@ -589,8 +631,50 @@ def run_opencode_stream(cmd, session_id, timeout=600):
             try:
                 event = json.loads(line)
                 has_json_output = True
+                last_output_time = time.time()
                 event_type = event.get("type", "")
                 part = event.get("part", {})
+
+                # 通用错误检测：提取错误信息
+                def extract_error(ev):
+                    """从事件中提取错误信息，支持多种嵌套格式"""
+                    # 直接字段
+                    for key in ("error", "message"):
+                        val = ev.get(key)
+                        if isinstance(val, str) and val:
+                            return val
+                        if isinstance(val, dict):
+                            msg = val.get("message") or val.get("error") or ""
+                            if msg:
+                                return str(msg)
+                    # data 子对象
+                    data = ev.get("data")
+                    if isinstance(data, dict):
+                        for key in ("error", "message"):
+                            val = data.get(key)
+                            if isinstance(val, str) and val:
+                                return val
+                            if isinstance(val, dict):
+                                msg = val.get("message") or val.get("error") or ""
+                                if msg:
+                                    return str(msg)
+                    # name 字段为错误名（如 UnknownError, RateLimitError）
+                    name = ev.get("name", "")
+                    if isinstance(name, str) and "error" in name.lower():
+                        data_msg = ""
+                        if isinstance(data, dict):
+                            data_msg = data.get("message") or data.get("error") or ""
+                        return data_msg or name
+                    return ""
+
+                err_text = extract_error(event)
+                if err_text:
+                    import sys
+                    print(f"[DEBUG] error detected: {err_text[:200]}", file=sys.stderr, flush=True)
+                    try: proc.kill()
+                    except: pass
+                    yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
+                    return
 
                 if event_type == "text":
                     text = part.get("text", "")
@@ -616,10 +700,31 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                 elif event_type == "step_finish":
                     tokens = part.get("tokens", {})
                     yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
+                elif event_type and event_type not in ("step_start", "step_finish"):
+                    # 未知事件类型 — 记录日志
+                    import sys
+                    print(f"[DEBUG] unknown event_type={event_type} data={line[:200]}", file=sys.stderr, flush=True)
             except json.JSONDecodeError:
-                pass
+                # 非 JSON 行 — 可能是错误信息（限流、模型不可用等）
+                non_json = line.strip()
+                import sys
+                print(f"[DEBUG] non-JSON stdout: {non_json[:200]}", file=sys.stderr, flush=True)
+                if non_json and len(non_json) > 5:
+                    lower_line = non_json.lower()
+                    if any(kw in lower_line for kw in RATE_LIMIT_KEYWORDS):
+                        try: proc.kill()
+                        except: pass
+                        yield f"event: stream_error\ndata: {safe_truncate(non_json)}\n\n"
+                        return
 
         proc.wait(timeout=timeout)
+
+        # stdout 关闭后，检查 stderr 是否有错误
+        with stderr_lock:
+            recent_stderr = list(stderr_lines[-10:])
+        if recent_stderr:
+            err_text = "\n".join(recent_stderr)
+            yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
 
     except GeneratorExit:
         try: proc.kill()
@@ -629,7 +734,7 @@ def run_opencode_stream(cmd, session_id, timeout=600):
     except subprocess.TimeoutExpired:
         try: proc.kill()
         except: pass
-        yield "event: error\ndata: 请求超时\n\n"
+        yield "event: stream_error\ndata: 请求超时\n\n"
     finally:
         stdout_thread.join(timeout=2)
 
@@ -667,6 +772,7 @@ def api_session_stream(session_id):
     directory = row["directory"]
 
     def generate():
+        had_error = False
         try:
             cmd = [
                 "opencode", "run",
@@ -678,13 +784,19 @@ def api_session_stream(session_id):
             if model:
                 cmd.insert(2, "-m")
                 cmd.insert(3, model)
-            yield from run_opencode_stream(cmd, session_id)
+            for event in run_opencode_stream(cmd, session_id):
+                if "stream_error" in event:
+                    had_error = True
+                yield event
         except FileNotFoundError:
-            yield f"event: error\ndata: opencode CLI 未找到，请确认已安装 opencode\n\n"
+            had_error = True
+            yield f"event: stream_error\ndata: opencode CLI 未找到，请确认已安装 opencode\n\n"
         except Exception as e:
-            yield f"event: error\ndata: {str(e)}\n\n"
+            had_error = True
+            yield f"event: stream_error\ndata: {str(e)}\n\n"
         finally:
-            yield f"event: done\ndata: {json.dumps({'session_id': session_id})}\n\n"
+            if not had_error:
+                yield f"event: done\ndata: {json.dumps({'session_id': session_id})}\n\n"
 
     return Response(
         stream_with_context(generate()),
@@ -719,6 +831,7 @@ def api_session_new():
 
     def generate():
         new_session_id = None
+        had_error = False
         try:
             cmd = [
                 "opencode", "run",
@@ -759,21 +872,40 @@ def api_session_new():
 
             new_session_id = None
             has_output = False
-            error_lines = []
+            last_output_time = time.time()
+            RATE_LIMIT_KW = ["rate limit", "quota", "exceeded", "too many", "retry-after",
+                             "free usage", "subscribe", "retrying in", "429"]
             while True:
                 try:
-                    line = stdout_queue2.get(timeout=8)
+                    line = stdout_queue2.get(timeout=5)
                 except queue.Empty:
                     with stderr_lock2:
-                        if stderr_lines:
-                            err_text = "\n".join(stderr_lines[-5:])
-                            proc.kill()
-                            yield f"event: error\ndata: {err_text[:500]}\n\n"
+                        recent_stderr = list(stderr_lines[-10:])
+                    if recent_stderr:
+                        combined = "\n".join(recent_stderr).lower()
+                        is_rate_limit = any(kw in combined for kw in RATE_LIMIT_KW)
+                        if is_rate_limit or not has_output:
+                            try: proc.kill()
+                            except: pass
+                            err_text = "\n".join(recent_stderr[-5:])
+                            had_error = True
+                            yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
                             return
+                    # 无任何输出超过 25 秒，终止
+                    elapsed = int(time.time() - last_output_time)
+                    if elapsed > 25:
+                        try: proc.kill()
+                        except: pass
+                        had_error = True
+                        yield f"event: stream_error\ndata: 模型无响应（可能已达到使用限制），请切换模型后重试\n\n"
+                        return
+                    # 发送状态事件，防止前端 30 秒超时
+                    yield f"event: status\ndata: waiting\n\n"
                     continue
                 if line is None:
                     break
                 has_output = True
+                last_output_time = time.time()
                 line = line.strip()
                 if not line:
                     continue
@@ -785,6 +917,44 @@ def api_session_new():
 
                     ev_type = ev.get("type", "")
                     part = ev.get("part", {})
+
+                    # 通用错误检测
+                    def extract_error_new(e):
+                        for key in ("error", "message"):
+                            val = e.get(key)
+                            if isinstance(val, str) and val:
+                                return val
+                            if isinstance(val, dict):
+                                msg = val.get("message") or val.get("error") or ""
+                                if msg:
+                                    return str(msg)
+                        d = e.get("data")
+                        if isinstance(d, dict):
+                            for key in ("error", "message"):
+                                val = d.get(key)
+                                if isinstance(val, str) and val:
+                                    return val
+                                if isinstance(val, dict):
+                                    msg = val.get("message") or val.get("error") or ""
+                                    if msg:
+                                        return str(msg)
+                        name = e.get("name", "")
+                        if isinstance(name, str) and "error" in name.lower():
+                            dm = ""
+                            if isinstance(d, dict):
+                                dm = d.get("message") or d.get("error") or ""
+                            return dm or name
+                        return ""
+
+                    err_text = extract_error_new(ev)
+                    if err_text:
+                        import sys
+                        print(f"[DEBUG] new-session error detected: {err_text[:200]}", file=sys.stderr, flush=True)
+                        try: proc.kill()
+                        except: pass
+                        had_error = True
+                        yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
+                        return
 
                     if ev_type == "text":
                         txt = part.get("text", "")
@@ -808,27 +978,48 @@ def api_session_new():
                     elif ev_type == "step_finish":
                         tokens = part.get("tokens", {})
                         yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
+                    elif ev_type and ev_type not in ("step_start", "step_finish"):
+                        import sys
+                        print(f"[DEBUG] new-session unknown event_type={ev_type} data={line[:200]}", file=sys.stderr, flush=True)
                 except json.JSONDecodeError:
-                    pass
+                    non_json = line.strip()
+                    import sys
+                    print(f"[DEBUG] new-session non-JSON stdout: {non_json[:200]}", file=sys.stderr, flush=True)
+                    if non_json and len(non_json) > 5:
+                        lower_line = non_json.lower()
+                        if any(kw in lower_line for kw in RATE_LIMIT_KW):
+                            try: proc.kill()
+                            except: pass
+                            had_error = True
+                            yield f"event: stream_error\ndata: {safe_truncate(non_json)}\n\n"
+                            return
 
             proc.wait(timeout=600)
 
-            if not has_output and stderr_lines:
-                err_text = "\n".join(stderr_lines[-10:])
-                yield f"event: error\ndata: {err_text[:500]}\n\n"
+            # stdout 关闭后，检查 stderr 是否有错误（限流/异常退出等）
+            with stderr_lock2:
+                recent_stderr = list(stderr_lines[-10:])
+            if recent_stderr:
+                err_text = "\n".join(recent_stderr)
+                had_error = True
+                yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
 
             stderr_thread.join(timeout=2)
 
         except FileNotFoundError:
-            yield "event: error\ndata: opencode CLI 未找到，请确认已安装 opencode\n\n"
+            had_error = True
+            yield "event: stream_error\ndata: opencode CLI 未找到，请确认已安装 opencode\n\n"
         except subprocess.TimeoutExpired:
+            had_error = True
             if proc:
                 proc.kill()
-            yield "event: error\ndata: 请求超时\n\n"
+            yield "event: stream_error\ndata: 请求超时\n\n"
         except Exception as e:
-            yield f"event: error\ndata: {str(e)}\n\n"
+            had_error = True
+            yield f"event: stream_error\ndata: {str(e)}\n\n"
         finally:
-            yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or ''})}\n\n"
+            if not had_error:
+                yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or ''})}\n\n"
 
     return Response(
         stream_with_context(generate()),
@@ -1015,20 +1206,34 @@ def api_session_fork(session_id):
             stdout_thread3.start()
 
             has_output = False
+            last_output_time = time.time()
+            RATE_LIMIT_KW = ["rate limit", "quota", "exceeded", "too many", "retry-after",
+                             "free usage", "subscribe", "retrying in", "429"]
             while True:
                 try:
-                    line = stdout_queue3.get(timeout=8)
+                    line = stdout_queue3.get(timeout=5)
                 except queue.Empty:
                     with stderr_lock3:
-                        if stderr_lines:
-                            err_text = "\n".join(stderr_lines[-5:])
-                            proc.kill()
-                            yield f"event: error\ndata: {err_text[:500]}\n\n"
+                        recent_stderr = list(stderr_lines[-10:])
+                    if recent_stderr:
+                        combined = "\n".join(recent_stderr).lower()
+                        is_rate_limit = any(kw in combined for kw in RATE_LIMIT_KW)
+                        if is_rate_limit or not has_output:
+                            try: proc.kill()
+                            except: pass
+                            err_text = "\n".join(recent_stderr[-5:])
+                            yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
                             return
+                    if has_output and (time.time() - last_output_time > 120):
+                        try: proc.kill()
+                        except: pass
+                        yield "event: stream_error\ndata: 请求超时（120 秒无输出）\n\n"
+                        return
                     continue
                 if line is None:
                     break
                 has_output = True
+                last_output_time = time.time()
                 line = line.strip()
                 if not line: continue
                 try:
@@ -1057,28 +1262,32 @@ def api_session_fork(session_id):
                     elif ev_type == "step_finish":
                         tokens = part.get("tokens", {})
                         yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
-                        tname = part.get("tool_name", "")
-                        yield f"event: tool_result\ndata: {json.dumps({'tool': tname, 'status': 'done'})}\n\n"
-                    elif ev_type == "step_start":
-                        yield "event: status\ndata: step_start\n\n"
-                    elif ev_type == "step_finish":
-                        tokens = part.get("tokens", {})
-                        yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
                 except json.JSONDecodeError:
-                    pass
+                    non_json = line.strip()
+                    if non_json and len(non_json) > 5:
+                        lower_line = non_json.lower()
+                        if any(kw in lower_line for kw in RATE_LIMIT_KW):
+                            try: proc.kill()
+                            except: pass
+                            yield f"event: stream_error\ndata: {safe_truncate(non_json)}\n\n"
+                            return
 
             proc.wait(timeout=600)
-            if not has_output and stderr_lines:
-                yield f"event: error\ndata: {' '.join(stderr_lines[-5:])[:500]}\n\n"
+            # stdout 关闭后，检查 stderr
+            with stderr_lock3:
+                recent_stderr = list(stderr_lines[-10:])
+            if recent_stderr:
+                err_text = "\n".join(recent_stderr)
+                yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
             stderr_thread.join(timeout=2)
 
         except FileNotFoundError:
-            yield "event: error\ndata: opencode CLI 未找到\n\n"
+            yield "event: stream_error\ndata: opencode CLI 未找到\n\n"
         except subprocess.TimeoutExpired:
             if proc: proc.kill()
-            yield "event: error\ndata: 请求超时\n\n"
+            yield "event: stream_error\ndata: 请求超时\n\n"
         except Exception as e:
-            yield f"event: error\ndata: {str(e)}\n\n"
+            yield f"event: stream_error\ndata: {str(e)}\n\n"
         finally:
             yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or ''})}\n\n"
 
