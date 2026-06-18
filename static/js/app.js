@@ -35,6 +35,7 @@ async function init() {
     <span>&#128193; 项目 <span class="num">${stats.total_projects}</span></span>
     <span>&#9889; Input <span class="num">${fmtTokens(stats.total_tokens_input)}</span></span>
     <span>&#9889; Output <span class="num">${fmtTokens(stats.total_tokens_output)}</span></span>
+    <button class="stats-btn" id="statsBtn" onclick="toggleStatsPanel()">&#128202; 详细统计</button>
   `;
   document.getElementById('statsFooter').textContent = `共 ${stats.total_sessions} 个会话 · ${stats.total_projects} 个项目`;
 
@@ -642,4 +643,148 @@ function fmtFileSize(bytes) {
   if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
   if (bytes >= 1024) return (bytes / 1024).toFixed(0) + ' KB';
   return bytes + ' B';
+}
+
+// ── Phase 3: Charts ──
+
+let statsOpen = false;
+let chartInstances = {};
+
+function toggleStatsPanel() {
+  statsOpen = !statsOpen;
+  const panel = document.getElementById('statsPanel');
+  const btn = document.getElementById('statsBtn');
+  panel.classList.toggle('show', statsOpen);
+  btn.classList.toggle('active', statsOpen);
+  if (statsOpen) {
+    loadStatsData();
+  }
+}
+
+async function loadStatsData() {
+  try {
+    const data = await api('/api/stats/tokens');
+    renderCharts(data);
+    renderOverview(data);
+  } catch (e) {
+    document.getElementById('statsContent').innerHTML =
+      `<div class="file-entry loading">加载失败: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function renderCharts(data) {
+  // Destroy old charts
+  for (const key in chartInstances) {
+    chartInstances[key].destroy();
+  }
+  chartInstances = {};
+
+  const chartOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { labels: { color: '#8899aa', font: { size: 11 } } },
+    },
+  };
+
+  // 1. Daily token chart
+  if (data.daily && data.daily.length > 0) {
+    const ctx = document.getElementById('chartDaily').getContext('2d');
+    chartInstances.daily = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: data.daily.map(d => d.day.slice(5)),
+        datasets: [
+          { label: 'Input', data: data.daily.map(d => Math.round(d.input / 1000)),
+            backgroundColor: '#4fc3f780', borderRadius: 3 },
+          { label: 'Output', data: data.daily.map(d => Math.round(d.output / 1000)),
+            backgroundColor: '#81c78480', borderRadius: 3 },
+        ],
+      },
+      options: {
+        ...chartOpts,
+        scales: {
+          x: { ticks: { color: '#8899aa', font: { size: 10 } }, grid: { color: '#2a3a5a' } },
+          y: { ticks: { color: '#8899aa', font: { size: 10 } }, grid: { color: '#2a3a5a' },
+               title: { display: true, text: 'K tokens', color: '#8899aa', font: { size: 10 } } },
+        },
+      },
+    });
+  }
+
+  // 2. Model chart
+  if (data.by_model && data.by_model.length > 0) {
+    const ctx2 = document.getElementById('chartModels').getContext('2d');
+    const labels = data.by_model.map(m => m.model.split('/').pop());
+    chartInstances.models = new Chart(ctx2, {
+      type: 'doughnut',
+      data: {
+        labels,
+        datasets: [{
+          data: data.by_model.map(m => Math.round((m.input + m.output) / 1000)),
+          backgroundColor: ['#4fc3f7', '#81c784', '#ffb74d', '#e57373', '#ba68c8',
+                            '#4db6ac', '#ff8a65', '#90a4ae', '#a1887f', '#7986cb'],
+          borderWidth: 0,
+        }],
+      },
+      options: {
+        ...chartOpts,
+        plugins: {
+          ...chartOpts.plugins,
+          legend: { position: 'right', labels: { color: '#8899aa', font: { size: 10 } } },
+        },
+      },
+    });
+  }
+
+  // 3. Project chart
+  if (data.by_project && data.by_project.length > 0) {
+    const ctx3 = document.getElementById('chartProjects').getContext('2d');
+    chartInstances.projects = new Chart(ctx3, {
+      type: 'bar',
+      data: {
+        labels: data.by_project.map(p => p.project),
+        datasets: [{
+          label: 'Total tokens',
+          data: data.by_project.map(p => Math.round((p.input + p.output) / 1000)),
+          backgroundColor: '#4fc3f780', borderRadius: 3,
+        }],
+      },
+      options: {
+        ...chartOpts,
+        indexAxis: 'y',
+        scales: {
+          x: { ticks: { color: '#8899aa', font: { size: 10 } }, grid: { color: '#2a3a5a' },
+               title: { display: true, text: 'K tokens', color: '#8899aa', font: { size: 10 } } },
+          y: { ticks: { color: '#8899aa', font: { size: 10 } }, grid: { display: false } },
+        },
+      },
+    });
+  }
+}
+
+function renderOverview(data) {
+  const totalInput = data.by_model ? data.by_model.reduce((s, m) => s + m.input, 0) : 0;
+  const totalOutput = data.by_model ? data.by_model.reduce((s, m) => s + m.output, 0) : 0;
+  const totalCost = data.by_model ? data.by_model.reduce((s, m) => s + m.cost, 0) : 0;
+
+  document.getElementById('statsOverview').innerHTML = `
+    <div class="stat-card">
+      <div class="stat-label">总 Input</div>
+      <div class="stat-value">${fmtTokens(totalInput)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">总 Output</div>
+      <div class="stat-value">${fmtTokens(totalOutput)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">总消耗</div>
+      <div class="stat-value">$${totalCost.toFixed(4)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">模型数</div>
+      <div class="stat-value">${data.by_model ? data.by_model.length : 0}</div>
+      <div class="stat-sub">30 天内</div>
+    </div>
+  `;
 }
