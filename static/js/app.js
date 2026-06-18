@@ -149,7 +149,7 @@ async function openSession(id) {
 
   const s = data.session;
   mainTitle.textContent = s.title || '未命名会话';
-  mainInfo.textContent = `${s.model} · ${s.message_count} 条消息`;
+  mainInfo.textContent = `${s.model} · ${data.message_count} 条消息`;
 
   let html = '';
   for (const m of data.messages) {
@@ -312,3 +312,166 @@ function fmtTokens(n) {
 
 // ── Start ──
 init();
+
+// ── Phase 2: New Session Modal ──
+
+function showNewSessionModal() {
+  const modal = document.getElementById('newSessionModal');
+  const dirSelect = document.getElementById('newSessionDir');
+  // Populate directory list
+  dirSelect.innerHTML = '';
+  for (const d of allDirectories) {
+    const opt = document.createElement('option');
+    opt.value = d.path;
+    opt.textContent = d.name + ' (' + d.session_count + ' 会话)';
+    dirSelect.appendChild(opt);
+  }
+  // Also allow custom path
+  const customOpt = document.createElement('option');
+  customOpt.value = '__custom__';
+  customOpt.textContent = '—— 输入自定义路径 ——';
+  dirSelect.appendChild(customOpt);
+
+  document.getElementById('newSessionMsg').value = '';
+  document.getElementById('newSessionSubmit').disabled = false;
+  modal.classList.add('show');
+  setTimeout(() => document.getElementById('newSessionMsg').focus(), 100);
+}
+
+function closeNewSessionModal() {
+  document.getElementById('newSessionModal').classList.remove('show');
+}
+
+function startNewSession() {
+  const dirSelect = document.getElementById('newSessionDir');
+  const msgInput = document.getElementById('newSessionMsg');
+  const submitBtn = document.getElementById('newSessionSubmit');
+
+  let directory = dirSelect.value;
+  if (directory === '__custom__') {
+    directory = prompt('请输入工作目录路径：');
+    if (!directory) return;
+  }
+  const message = msgInput.value.trim();
+  if (!message) { alert('请输入消息'); return; }
+
+  submitBtn.disabled = true;
+  closeNewSessionModal();
+
+  // Switch to main area, show loading
+  const messagesArea = document.getElementById('messagesArea');
+  const mainTitle = document.getElementById('mainTitle');
+  const mainInfo = document.getElementById('mainInfo');
+  const inputArea = document.getElementById('inputArea');
+
+  // Abort any existing stream
+  if (eventSource) { eventSource.close(); eventSource = null; }
+
+  currentSessionId = null;
+  mainTitle.textContent = '新建会话...';
+  mainInfo.textContent = directory;
+
+  const streamId = 'stream_' + Date.now();
+  messagesArea.innerHTML = `
+    <div class="msg user">
+      <div class="msg-avatar">U</div>
+      <div class="msg-body">
+        <div class="role-label">你 · 刚刚</div>
+        <div class="content">${escHtml(message)}</div>
+      </div>
+    </div>
+    <div class="msg assistant streaming" id="${streamId}">
+      <div class="msg-avatar">AI</div>
+      <div class="msg-body">
+        <div class="role-label">AI · 思考中...</div>
+        <div class="thinking-content" id="${streamId}_thinking"></div>
+        <div class="content" id="${streamId}_text"></div>
+        <div class="loading" id="${streamId}_loading" style="padding:10px"><div class="spinner"></div></div>
+      </div>
+    </div>`;
+  messagesArea.scrollTop = messagesArea.scrollHeight;
+
+  // Send POST via fetch + EventSource doesn't support POST, so use fetch with streaming
+  fetch('/api/sessions/new', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ directory, message }),
+  }).then(async (response) => {
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || '请求失败');
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // Parse SSE events from buffer
+      const events = buffer.split('\n\n');
+      buffer = events.pop() || ''; // keep incomplete event
+
+      for (const block of events) {
+        const lines = block.split('\n');
+        let eventType = '';
+        let data = '';
+        for (const line of lines) {
+          if (line.startsWith('event: ')) eventType = line.slice(7);
+          else if (line.startsWith('data: ')) data = line.slice(6);
+        }
+
+        if (eventType === 'thinking') {
+          const el = document.getElementById(streamId + '_thinking');
+          if (el && el.textContent.length < 2000) {
+            el.textContent += data.replace(/\\n/g, '\n');
+            messagesArea.scrollTop = messagesArea.scrollHeight;
+          }
+        } else if (eventType === 'text') {
+          const el = document.getElementById(streamId + '_text');
+          if (el) {
+            el.textContent += data.replace(/\\n/g, '\n');
+            messagesArea.scrollTop = messagesArea.scrollHeight;
+          }
+        } else if (eventType === 'done') {
+          const info = JSON.parse(data || '{}');
+          const newId = info.session_id;
+
+          // Remove loading, end streaming
+          const loading = document.getElementById(streamId + '_loading');
+          const msgEl = document.getElementById(streamId);
+          if (loading) loading.remove();
+          if (msgEl) msgEl.classList.remove('streaming');
+
+          if (newId) {
+            currentSessionId = newId;
+            // Refresh session list and switch to new session
+            const sessData = await api('/api/sessions?limit=200');
+            allSessions = sessData.sessions;
+            sessions = allSessions;
+            renderSidebar();
+            // Load the full session
+            openSession(newId);
+          } else {
+            mainTitle.textContent = '新建会话';
+            inputArea.classList.add('show');
+          }
+        } else if (eventType === 'error') {
+          const loading = document.getElementById(streamId + '_loading');
+          const msgEl = document.getElementById(streamId);
+          if (loading) loading.remove();
+          if (msgEl) msgEl.classList.remove('streaming');
+          messagesArea.innerHTML += `<div class="empty-state"><p style="color:var(--accent3)">错误: ${escHtml(data)}</p></div>`;
+          submitBtn.disabled = false;
+        }
+      }
+    }
+  }).catch((err) => {
+    const loading = document.getElementById(streamId + '_loading');
+    if (loading) loading.remove();
+    messagesArea.innerHTML += `<div class="empty-state"><p style="color:var(--accent3)">错误: ${escHtml(err.message)}</p></div>`;
+    submitBtn.disabled = false;
+  });
+}

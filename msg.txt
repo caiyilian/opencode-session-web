@@ -1,0 +1,11 @@
+feat: add new session creation with SSE streaming (Phase 2)
+
+- Add POST /api/sessions/new endpoint with opencode CLI subprocess
+- Extract sessionID from step_start event to auto-navigate after creation
+- Add "新建会话" button in sidebar footer
+- Add modal dialog for directory selection + initial message
+- Use fetch + ReadableStream for POST-based SSE reading
+- Auto-refresh session list after new session created
+- Update docs: mark Phase 2 completed items (4/5)
+
+Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>
