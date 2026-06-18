@@ -314,7 +314,6 @@ async function openSession(id) {
   messagesArea.scrollTop = messagesArea.scrollHeight;
 
   // Add undo button to header
-  const mainInfo = document.getElementById('mainInfo');
   const existingUndo = document.getElementById('undoHeaderBtn');
   if (!existingUndo) {
     const undoBtn = document.createElement('span');
