@@ -1,0 +1,8 @@
+[project]
+name = "opencode-session-web"
+version = "0.2.0"
+description = "OpenCode 会话 Web 查看器 —— 在浏览器中浏览和管理本地的 OpenCode 对话历史"
+requires-python = ">=3.12"
+dependencies = [
+    "flask>=3.0",
+]

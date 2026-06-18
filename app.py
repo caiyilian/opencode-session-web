@@ -6,9 +6,12 @@ OpenCode 会话 Web 查看器 — Flask 后端
 
 import json
 import os
+import subprocess
 import sqlite3
+import queue
+import threading
 from pathlib import Path
-from flask import Flask, jsonify, request, render_template, send_from_directory
+from flask import Flask, jsonify, request, render_template, Response, stream_with_context
 
 app = Flask(__name__)
 
@@ -394,6 +397,312 @@ def api_models():
     return jsonify({"models": [{"name": format_model(r["model"]), "count": r["cnt"]} for r in rows]})
 
 
+@app.route("/api/available-models")
+def api_available_models():
+    """获取所有可用模型列表（来自 opencode CLI）"""
+    try:
+        result = subprocess.run(
+            ["opencode", "models"],
+            capture_output=True, text=True, encoding="utf-8",
+            timeout=30,
+        )
+        models = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        return jsonify({"models": models})
+    except FileNotFoundError:
+        return jsonify({"error": "opencode CLI 未找到"}), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "获取模型列表超时"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Phase 2: 子进程辅助函数 ─────────────────────────────
+
+
+def run_opencode_stream(cmd, session_id, timeout=600):
+    """运行 opencode CLI 子进程，产生 SSE 事件。
+
+    同时读取 stdout 和 stderr。
+    - stdout 中的 JSON 事件 → 转换为 SSE event（text/thinking/done）
+    - stderr 中的内容 → 如果没有 stdout 输出则作为 error 事件发送
+    - 进程异常退出时发送 stderr 内容
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdin=subprocess.DEVNULL,
+    )
+
+    # 收集 stderr 的线程
+    stderr_lines = []
+    def read_stderr():
+        for line in proc.stderr:
+            line = line.strip()
+            if line:
+                stderr_lines.append(line)
+    stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+    stderr_thread.start()
+
+    has_any_output = False
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            has_any_output = True
+            try:
+                event = json.loads(line)
+                event_type = event.get("type", "")
+                part = event.get("part", {})
+
+                if event_type == "text":
+                    text = part.get("text", "")
+                    if text:
+                        safe_text = text.replace("\n", "\\n")
+                        yield f"event: text\ndata: {safe_text}\n\n"
+
+                elif event_type == "reasoning" or part.get("type") == "reasoning":
+                    text = part.get("text", event.get("text", ""))
+                    if text:
+                        safe_text = text.replace("\n", "\\n")
+                        yield f"event: thinking\ndata: {safe_text}\n\n"
+
+                elif event_type == "step_finish":
+                    tokens = part.get("tokens", {})
+                    yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
+
+            except json.JSONDecodeError:
+                pass
+
+        proc.wait(timeout=timeout)
+
+        # 如果 stdout 没有任何输出，发送 stderr 作为错误
+        if not has_any_output and stderr_lines:
+            err_text = "\n".join(stderr_lines[-10:])  # 最多最近 10 行
+            yield f"event: error\ndata: {err_text[:500]}\n\n"
+
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        yield "event: error\ndata: 请求超时\n\n"
+    finally:
+        # 确保 stderr 线程结束
+        stderr_thread.join(timeout=2)
+
+
+# ── Phase 2: SSE 流式输出 ──────────────────────────────
+
+@app.after_request
+def add_cors_headers(response):
+    """为 SSE 端点添加 CORS 和缓存控制头"""
+    response.headers.setdefault("Cache-Control", "no-cache")
+    return response
+
+
+@app.route("/api/sessions/<session_id>/stream")
+def api_session_stream(session_id):
+    """SSE 流式继续对话
+
+    从 DB 读取会话的工作目录，调用
+    `opencode run --dir <directory> -s <session_id> <message> --format json`
+    将 JSON 事件流转换为 SSE 事件推送到前端。
+    """
+    message = request.args.get("message", "").strip()
+    if not message:
+        return jsonify({"error": "消息不能为空"}), 400
+
+    model = request.args.get("model", "").strip()
+
+    # 从 DB 读取会话信息，获取工作目录
+    conn = get_db()
+    row = conn.execute("SELECT directory FROM session WHERE id = ?", (session_id,)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "会话不存在"}), 404
+
+    directory = row["directory"]
+
+    def generate():
+        try:
+            cmd = [
+                "opencode", "run",
+                "--dir", directory,
+                "-s", session_id,
+                message,
+                "--format", "json",
+            ]
+            if model:
+                cmd.insert(2, "-m")
+                cmd.insert(3, model)
+            yield from run_opencode_stream(cmd, session_id)
+        except FileNotFoundError:
+            yield f"event: error\ndata: opencode CLI 未找到，请确认已安装 opencode\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {str(e)}\n\n"
+        finally:
+            yield f"event: done\ndata: {json.dumps({'session_id': session_id})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
+# ── Phase 2: 新建会话 ──────────────────────────────────
+
+
+@app.route("/api/sessions/new", methods=["POST"])
+def api_session_new():
+    """新建会话 — SSE 流式返回
+
+    调用 `opencode run --dir <directory> <message> --format json`
+    从 JSON 事件流中提取新 sessionID，转换为 SSE 事件推送到前端。
+    """
+    data = request.get_json(silent=True) or {}
+    directory = (data.get("directory") or "").strip()
+    message = (data.get("message") or "").strip()
+    model = (data.get("model") or "").strip()
+
+    if not message:
+        return jsonify({"error": "消息不能为空"}), 400
+    if not directory or not os.path.isdir(directory):
+        return jsonify({"error": "无效的工作目录"}), 400
+
+    def generate():
+        new_session_id = None
+        try:
+            cmd = [
+                "opencode", "run",
+                "--dir", directory,
+                message,
+                "--format", "json",
+            ]
+            if model:
+                cmd.insert(2, "-m")
+                cmd.insert(3, model)
+
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace",
+                stdin=subprocess.DEVNULL,
+            )
+
+            # stderr 收集线程
+            stderr_lines = []
+            def read_stderr():
+                for line in proc.stderr:
+                    line = line.strip()
+                    if line:
+                        stderr_lines.append(line)
+            stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+            stderr_thread.start()
+
+            has_output = False
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                has_output = True
+                try:
+                    ev = json.loads(line)
+                    # 捕获新 session ID
+                    if not new_session_id and "sessionID" in ev:
+                        new_session_id = ev["sessionID"]
+
+                    ev_type = ev.get("type", "")
+                    part = ev.get("part", {})
+
+                    if ev_type == "text":
+                        txt = part.get("text", "")
+                        if txt:
+                            safe = txt.replace("\n", "\\n")
+                            yield f"event: text\ndata: {safe}\n\n"
+                    elif ev_type == "reasoning" or part.get("type") == "reasoning":
+                        txt = part.get("text", ev.get("text", ""))
+                        if txt:
+                            safe = txt.replace("\n", "\\n")
+                            yield f"event: thinking\ndata: {safe}\n\n"
+                    elif ev_type == "step_finish":
+                        tokens = part.get("tokens", {})
+                        yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
+                except json.JSONDecodeError:
+                    pass
+
+            proc.wait(timeout=600)
+
+            if not has_output and stderr_lines:
+                err_text = "\n".join(stderr_lines[-10:])
+                yield f"event: error\ndata: {err_text[:500]}\n\n"
+
+            stderr_thread.join(timeout=2)
+
+        except FileNotFoundError:
+            yield "event: error\ndata: opencode CLI 未找到，请确认已安装 opencode\n\n"
+        except subprocess.TimeoutExpired:
+            if proc:
+                proc.kill()
+            yield "event: error\ndata: 请求超时\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {str(e)}\n\n"
+        finally:
+            yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or ''})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
+# ── Phase 2: 文件浏览 ──────────────────────────────────
+
+
+@app.route("/api/files")
+def api_files():
+    """列出指定目录的文件和子目录"""
+    path = request.args.get("path", "").strip()
+    if not path:
+        return jsonify({"error": "path 参数不能为空"}), 400
+
+    # 安全检查：拒绝路径遍历
+    norm = os.path.normpath(path)
+    if not os.path.isdir(norm):
+        return jsonify({"error": "目录不存在"}), 404
+
+    try:
+        entries = []
+        with os.scandir(norm) as it:
+            for entry in sorted(it, key=lambda e: (not e.is_dir(follow_symlinks=False), e.name.lower())):
+                is_dir = entry.is_dir(follow_symlinks=False)
+                stat = entry.stat(follow_symlinks=False)
+                # 跳过隐藏文件/目录（以 . 开头）
+                if entry.name.startswith("."):
+                    continue
+                entries.append({
+                    "name": entry.name,
+                    "type": "dir" if is_dir else "file",
+                    "size": stat.st_size if not is_dir else 0,
+                    "mtime": int(stat.st_mtime),
+                })
+        return jsonify({"path": norm, "entries": entries})
+    except PermissionError:
+        return jsonify({"error": "无权限访问该目录"}), 403
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── 前端页面 ──────────────────────────────────────────────
 
 @app.route("/")
@@ -418,4 +727,4 @@ if __name__ == "__main__":
     print(f"  地址:   http://127.0.0.1:{port}")
     print(f"  {'=' * 40}")
 
-    app.run(host="127.0.0.1", port=port, debug=False)
+    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
