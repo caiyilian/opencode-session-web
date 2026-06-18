@@ -8,6 +8,8 @@ import json
 import os
 import subprocess
 import sqlite3
+import queue
+import threading
 from pathlib import Path
 from flask import Flask, jsonify, request, render_template, Response, stream_with_context
 
@@ -414,6 +416,83 @@ def api_available_models():
         return jsonify({"error": str(e)}), 500
 
 
+# ── Phase 2: 子进程辅助函数 ─────────────────────────────
+
+
+def run_opencode_stream(cmd, session_id, timeout=600):
+    """运行 opencode CLI 子进程，产生 SSE 事件。
+
+    同时读取 stdout 和 stderr。
+    - stdout 中的 JSON 事件 → 转换为 SSE event（text/thinking/done）
+    - stderr 中的内容 → 如果没有 stdout 输出则作为 error 事件发送
+    - 进程异常退出时发送 stderr 内容
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdin=subprocess.DEVNULL,
+    )
+
+    # 收集 stderr 的线程
+    stderr_lines = []
+    def read_stderr():
+        for line in proc.stderr:
+            line = line.strip()
+            if line:
+                stderr_lines.append(line)
+    stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+    stderr_thread.start()
+
+    has_any_output = False
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            has_any_output = True
+            try:
+                event = json.loads(line)
+                event_type = event.get("type", "")
+                part = event.get("part", {})
+
+                if event_type == "text":
+                    text = part.get("text", "")
+                    if text:
+                        safe_text = text.replace("\n", "\\n")
+                        yield f"event: text\ndata: {safe_text}\n\n"
+
+                elif event_type == "reasoning" or part.get("type") == "reasoning":
+                    text = part.get("text", event.get("text", ""))
+                    if text:
+                        safe_text = text.replace("\n", "\\n")
+                        yield f"event: thinking\ndata: {safe_text}\n\n"
+
+                elif event_type == "step_finish":
+                    tokens = part.get("tokens", {})
+                    yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
+
+            except json.JSONDecodeError:
+                pass
+
+        proc.wait(timeout=timeout)
+
+        # 如果 stdout 没有任何输出，发送 stderr 作为错误
+        if not has_any_output and stderr_lines:
+            err_text = "\n".join(stderr_lines[-10:])  # 最多最近 10 行
+            yield f"event: error\ndata: {err_text[:500]}\n\n"
+
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        yield "event: error\ndata: 请求超时\n\n"
+    finally:
+        # 确保 stderr 线程结束
+        stderr_thread.join(timeout=2)
+
+
 # ── Phase 2: SSE 流式输出 ──────────────────────────────
 
 @app.after_request
@@ -447,7 +526,6 @@ def api_session_stream(session_id):
     directory = row["directory"]
 
     def generate():
-        proc = None
         try:
             cmd = [
                 "opencode", "run",
@@ -459,64 +537,12 @@ def api_session_stream(session_id):
             if model:
                 cmd.insert(2, "-m")
                 cmd.insert(3, model)
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                stdin=subprocess.DEVNULL,
-            )
-
-            for line in proc.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                    event_type = event.get("type", "")
-                    part = event.get("part", {})
-
-                    if event_type == "text":
-                        text = part.get("text", "")
-                        if text:
-                            # SSE data 中不能包含换行符，替换为 \n 文本
-                            safe_text = text.replace("\n", "\\n")
-                            yield f"event: text\ndata: {safe_text}\n\n"
-
-                    elif event_type == "reasoning" or part.get("type") == "reasoning":
-                        text = part.get("text", event.get("text", ""))
-                        if text:
-                            safe_text = text.replace("\n", "\\n")
-                            yield f"event: thinking\ndata: {safe_text}\n\n"
-
-                    elif event_type == "step_finish":
-                        tokens = part.get("tokens", {})
-                        result = json.dumps({
-                            "session_id": session_id,
-                            "tokens": tokens,
-                            "cost": part.get("cost", 0),
-                        })
-                        yield f"event: done\ndata: {result}\n\n"
-
-                except json.JSONDecodeError:
-                    pass
-
-            # 等待子进程结束
-            if proc:
-                proc.wait(timeout=600)
-
+            yield from run_opencode_stream(cmd, session_id)
         except FileNotFoundError:
             yield f"event: error\ndata: opencode CLI 未找到，请确认已安装 opencode\n\n"
-        except subprocess.TimeoutExpired:
-            if proc:
-                proc.kill()
-            yield "event: error\ndata: 请求超时\n\n"
         except Exception as e:
             yield f"event: error\ndata: {str(e)}\n\n"
         finally:
-            # 确保最终发送 done 事件
             yield f"event: done\ndata: {json.dumps({'session_id': session_id})}\n\n"
 
     return Response(
@@ -551,7 +577,6 @@ def api_session_new():
         return jsonify({"error": "无效的工作目录"}), 400
 
     def generate():
-        proc = None
         new_session_id = None
         try:
             cmd = [
@@ -563,55 +588,61 @@ def api_session_new():
             if model:
                 cmd.insert(2, "-m")
                 cmd.insert(3, model)
+
             proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace",
                 stdin=subprocess.DEVNULL,
             )
 
+            # stderr 收集线程
+            stderr_lines = []
+            def read_stderr():
+                for line in proc.stderr:
+                    line = line.strip()
+                    if line:
+                        stderr_lines.append(line)
+            stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+            stderr_thread.start()
+
+            has_output = False
             for line in proc.stdout:
                 line = line.strip()
                 if not line:
                     continue
+                has_output = True
                 try:
-                    event = json.loads(line)
-                    event_type = event.get("type", "")
-                    part = event.get("part", {})
+                    ev = json.loads(line)
+                    # 捕获新 session ID
+                    if not new_session_id and "sessionID" in ev:
+                        new_session_id = ev["sessionID"]
 
-                    # 从第一个事件中提取新 session ID
-                    if not new_session_id and "sessionID" in event:
-                        new_session_id = event["sessionID"]
+                    ev_type = ev.get("type", "")
+                    part = ev.get("part", {})
 
-                    if event_type == "text":
-                        text = part.get("text", "")
-                        if text:
-                            safe_text = text.replace("\n", "\\n")
-                            yield f"event: text\ndata: {safe_text}\n\n"
-
-                    elif event_type == "reasoning" or part.get("type") == "reasoning":
-                        text = part.get("text", event.get("text", ""))
-                        if text:
-                            safe_text = text.replace("\n", "\\n")
-                            yield f"event: thinking\ndata: {safe_text}\n\n"
-
-                    elif event_type == "step_finish":
+                    if ev_type == "text":
+                        txt = part.get("text", "")
+                        if txt:
+                            safe = txt.replace("\n", "\\n")
+                            yield f"event: text\ndata: {safe}\n\n"
+                    elif ev_type == "reasoning" or part.get("type") == "reasoning":
+                        txt = part.get("text", ev.get("text", ""))
+                        if txt:
+                            safe = txt.replace("\n", "\\n")
+                            yield f"event: thinking\ndata: {safe}\n\n"
+                    elif ev_type == "step_finish":
                         tokens = part.get("tokens", {})
-                        result = json.dumps({
-                            "session_id": new_session_id or "",
-                            "tokens": tokens,
-                            "cost": part.get("cost", 0),
-                        })
-                        yield f"event: done\ndata: {result}\n\n"
-
+                        yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
                 except json.JSONDecodeError:
                     pass
 
-            if proc:
-                proc.wait(timeout=600)
+            proc.wait(timeout=600)
+
+            if not has_output and stderr_lines:
+                err_text = "\n".join(stderr_lines[-10:])
+                yield f"event: error\ndata: {err_text[:500]}\n\n"
+
+            stderr_thread.join(timeout=2)
 
         except FileNotFoundError:
             yield "event: error\ndata: opencode CLI 未找到，请确认已安装 opencode\n\n"
@@ -622,9 +653,7 @@ def api_session_new():
         except Exception as e:
             yield f"event: error\ndata: {str(e)}\n\n"
         finally:
-            if not new_session_id:
-                # 如果没拿到 session ID 也发 done
-                yield f"event: done\ndata: {json.dumps({'session_id': ''})}\n\n"
+            yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or ''})}\n\n"
 
     return Response(
         stream_with_context(generate()),
