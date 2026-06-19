@@ -110,32 +110,35 @@ function closeSidebar() {
 
 // ── Init ──
 async function init() {
-  // Load stats
-  const stats = await api('/api/stats');
-  document.getElementById('statsBar').innerHTML = `
-    <span>&#128202; 会话 <span class="num">${stats.total_sessions}</span></span>
-    <span>&#128193; 项目 <span class="num">${stats.total_projects}</span></span>
-    <span>&#9889; Input <span class="num">${fmtTokens(stats.total_tokens_input)}</span></span>
-    <span>&#9889; Output <span class="num">${fmtTokens(stats.total_tokens_output)}</span></span>
+  // 并行加载 stats、directories、sessions
+  const [stats, dirsData, sessData] = await Promise.all([
+    api('/api/stats'),
+    api('/api/directories'),
+    api('/api/sessions?limit=200'),
+  ]);
+
+  document.getElementById('statsBar').innerHTML = \`
+    <span>&#128202; 会话 <span class="num">\${stats.total_sessions}</span></span>
+    <span>&#128193; 项目 <span class="num">\${stats.total_projects}</span></span>
+    <span>&#9889; Input <span class="num">\${fmtTokens(stats.total_tokens_input)}</span></span>
+    <span>&#9889; Output <span class="num">\${fmtTokens(stats.total_tokens_output)}</span></span>
     <button class="stats-btn" id="statsBtn" onclick="toggleStatsPanel()">&#128202; 详细统计</button>
-  `;
-  document.getElementById('statsFooter').innerHTML = `
+  \`;
+  document.getElementById('statsFooter').innerHTML = \`
     <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
-      <span>共 ${stats.total_sessions} 个会话</span>
+      <span>共 \${stats.total_sessions} 个会话</span>
       <button class="compare-btn" id="compareBtn" onclick="toggleCompareMode()">&#128196; 对比</button>
     </div>
-  `;
+  \`;
 
-  // Load directories
-  const dirsData = await api('/api/directories');
   allDirectories = dirsData.directories;
-
-  // Load all sessions
-  const sessData = await api('/api/sessions?limit=200');
   allSessions = sessData.sessions;
   sessions = allSessions;
 
-  // Load available models
+  // 先渲染侧栏，让用户尽快看到内容
+  renderSidebar();
+
+  // 延后加载可用模型（调用 opencode models 子进程较慢）
   try {
     const modelsData = await api('/api/available-models');
     if (modelsData.models) {
@@ -146,24 +149,6 @@ async function init() {
     // 静默失败，模型切换功能不可用
   }
 
-  renderSidebar();
-}
-
-function populateModelSelectors() {
-  // Populate all model <select> elements
-  const selects = document.querySelectorAll('.model-select');
-  for (const sel of selects) {
-    const current = sel.value;
-    sel.innerHTML = '<option value="">默认模型</option>';
-    for (const m of allModels) {
-      const opt = document.createElement('option');
-      opt.value = m;
-      opt.textContent = m;
-      if (m === current) opt.selected = true;
-      sel.appendChild(opt);
-    }
-  }
-}
 
 // ── Render sidebar ──
 function renderSidebar() {
