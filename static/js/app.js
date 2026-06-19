@@ -117,19 +117,19 @@ async function init() {
     api('/api/sessions?limit=200'),
   ]);
 
-  document.getElementById('statsBar').innerHTML = \`
-    <span>&#128202; 会话 <span class="num">\${stats.total_sessions}</span></span>
-    <span>&#128193; 项目 <span class="num">\${stats.total_projects}</span></span>
-    <span>&#9889; Input <span class="num">\${fmtTokens(stats.total_tokens_input)}</span></span>
-    <span>&#9889; Output <span class="num">\${fmtTokens(stats.total_tokens_output)}</span></span>
+  document.getElementById('statsBar').innerHTML = `
+    <span>&#128202; 会话 <span class="num">${stats.total_sessions}</span></span>
+    <span>&#128193; 项目 <span class="num">${stats.total_projects}</span></span>
+    <span>&#9889; Input <span class="num">${fmtTokens(stats.total_tokens_input)}</span></span>
+    <span>&#9889; Output <span class="num">${fmtTokens(stats.total_tokens_output)}</span></span>
     <button class="stats-btn" id="statsBtn" onclick="toggleStatsPanel()">&#128202; 详细统计</button>
-  \`;
-  document.getElementById('statsFooter').innerHTML = \`
+  `;
+  document.getElementById('statsFooter').innerHTML = `
     <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
-      <span>共 \${stats.total_sessions} 个会话</span>
+      <span>共 ${stats.total_sessions} 个会话</span>
       <button class="compare-btn" id="compareBtn" onclick="toggleCompareMode()">&#128196; 对比</button>
     </div>
-  \`;
+  `;
 
   allDirectories = dirsData.directories;
   allSessions = sessData.sessions;
