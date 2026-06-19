@@ -538,6 +538,26 @@ def api_available_models():
         return jsonify({"error": str(e)}), 500
 
 
+# ── 删除会话 ──────────────────────────────────────────
+
+
+@app.route("/api/sessions/<session_id>", methods=["DELETE"])
+def api_session_delete(session_id):
+    """删\u9664会话及其所有消息和 part"""
+    conn = get_db()
+    cursor = conn.cursor()
+    row = cursor.execute("SELECT id FROM session WHERE id = ?", (session_id,)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "会话不存在"}), 404
+    cursor.execute("DELETE FROM part WHERE message_id IN (SELECT id FROM message WHERE session_id = ?)", (session_id,))
+    cursor.execute("DELETE FROM message WHERE session_id = ?", (session_id,))
+    cursor.execute("DELETE FROM session WHERE id = ?", (session_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
+
+
 # ── Phase 2: 子进程辅助函数 ─────────────────────────────
 
 

@@ -213,6 +213,7 @@ function renderSidebar() {
       const cb = compareMode ? `<input type="checkbox" class="compare-cb" ${checked} onchange="toggleCompareSelect('${s.id}', this)" onclick="event.stopPropagation()"> ` : '';
       html += `<div class="session-item ${active}" onclick="${compareMode ? 'toggleCompareSelect(\'' + s.id + '\', this.querySelector(\'.compare-cb\'))' : 'openSession(\'' + s.id + '\')'}">
         ${cb}<div class="title">${escHtml(s.title)}</div>
+        <span class="del-session" onclick="event.stopPropagation();deleteSession('${s.id}')" title="删除会话">&#10005;</span>
         <div class="meta">
           <span class="model">${s.model}</span>
           <span class="time">${s.time_updated}</span>
@@ -605,6 +606,23 @@ async function undoLastAction() {
     openSession(currentSessionId);
   } catch (e) {
     alert('撤销失败: ' + e.message);
+  }
+}
+
+async function deleteSession(id) {
+  if (!confirm('确定删除此会话？')) return;
+  try {
+    const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    // 刷新侧栏
+    const sessData = await api('/api/sessions?limit=200');
+    allSessions = sessData.sessions;
+    sessions = allSessions;
+    if (currentSessionId === id) showList();
+    else renderSidebar();
+  } catch (e) {
+    alert('删除失败: ' + e.message);
   }
 }
 
