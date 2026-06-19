@@ -1,0 +1,9 @@
+feat: session lazy loading + cache, auto-collapse old directories
+
+- SESSION_CACHE: session details cached in memory after first load
+- Switching sessions reuses cache, no repeated API calls
+- Cache cleared after sendMessage and undoLastAction
+- Directories without activity in 24h now collapsed by default
+- Backend returns recently_active per directory
+
+Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>

@@ -486,12 +486,16 @@ def api_directories():
     conn.close()
 
     dirs = []
+    now = int(time.time()) * 1000
+    one_day_ago = now - 86400 * 1000
     for r in rows:
+        last_active = r["last_active"] or 0
         dirs.append({
             "path": r["directory"],
             "name": get_project_name(r["directory"]),
             "session_count": r["session_count"],
-            "last_active": format_time(r["last_active"]),
+            "last_active": format_time(last_active),
+            "recently_active": last_active > one_day_ago,
         })
 
     return jsonify({"directories": dirs})

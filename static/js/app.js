@@ -11,6 +11,7 @@ let eventSource = null;
 let currentDirectory = '';  // 当前会话的工作目录
 let compareMode = false;    // 对比模式
 let compareIds = [];        // 选中的对比会话 ID 列表
+const SESSION_CACHE = {};   // 会话详情缓存 { sessionId: data }
 
 // ── API ──
 async function api(path) {
@@ -195,14 +196,17 @@ function renderSidebar() {
   let html = '';
   for (const g of sortedGroups) {
     const gid = 'grp_' + g.path.replace(/[^a-zA-Z0-9]/g, '_');
+    // 查找目录是否近期活跃
+    const dirInfo = allDirectories.find(d => d.path === g.path);
+    const isRecent = dirInfo ? dirInfo.recently_active : false;
     // Sort sessions within group by time
     g.sessions.sort((a, b) => (b.time_updated_raw || 0) - (a.time_updated_raw || 0));
     html += `<div class="dir-group">
       <div class="dir-header" onclick="toggleGroup('${gid}')">
-        <span class="arrow open" id="arr_${gid}">&#9654;</span>
+        <span class="arrow ${isRecent ? 'open' : ''}" id="arr_${gid}">&#9654;</span>
         ${g.name} <span style="font-weight:400;color:var(--text-dim)">(${g.sessions.length})</span>
       </div>
-      <div id="${gid}">`;
+      <div id="${gid}"${isRecent ? '' : ' style="display:none"'}>`;
     for (const s of g.sessions) {
       const active = s.id === currentSessionId ? 'active' : '';
       const checked = compareIds.includes(s.id) ? 'checked' : '';
@@ -274,11 +278,15 @@ async function openSession(id) {
     }
   }
 
-  const data = await api(`/api/sessions/${id}`);
-
-  if (data.error) {
-    messagesArea.innerHTML = `<div class="empty-state"><p>${data.error}</p></div>`;
-    return;
+  // 懒加载：先查缓存，没有再请求
+  let data = SESSION_CACHE[id];
+  if (!data) {
+    data = await api(`/api/sessions/${id}`);
+    if (data.error) {
+      messagesArea.innerHTML = `<div class="empty-state"><p>${data.error}</p></div>`;
+      return;
+    }
+    SESSION_CACHE[id] = data;
   }
 
   const s = data.session;
@@ -500,6 +508,8 @@ async function sendMessage() {
     if (!eventSource) return; // Already done
     clearTimeoutFn();
     eventSource.close();
+    // 清除缓存，确保下次打开时看到最新数据
+    if (currentSessionId) delete SESSION_CACHE[currentSessionId];
     eventSource = null;
     textarea.disabled = false;
     sendBtn.textContent = '发送';
@@ -590,7 +600,7 @@ async function undoLastAction() {
     const res = await fetch(`/api/sessions/${currentSessionId}/undo`, { method: 'POST' });
     const data = await res.json();
     if (data.error) { alert(data.error); return; }
-    // Reload session
+    delete SESSION_CACHE[currentSessionId];
     openSession(currentSessionId);
   } catch (e) {
     alert('撤销失败: ' + e.message);
