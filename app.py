@@ -707,9 +707,17 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                     if reason == "stop":
                         yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
                 elif event_type and event_type not in ("step_start", "step_finish"):
-                    # 未知事件类型 — 记录日志
-                    import sys
-                    print(f"[DEBUG] unknown event_type={event_type} data={line[:200]}", file=sys.stderr, flush=True)
+                    if event_type == "error":
+                        err_data = event.get("error", {})
+                        if isinstance(err_data, dict):
+                            err_msg = err_data.get("message", "") or err_data.get("data", {}).get("message", "")
+                        else:
+                            err_msg = str(err_data)
+                        if err_msg:
+                            yield f"event: stream_error\ndata: {safe_truncate(err_msg)}\n\n"
+                    else:
+                        import sys
+                        print(f"[DEBUG] unknown event_type={event_type} data={line[:200]}", file=sys.stderr, flush=True)
             except json.JSONDecodeError:
                 # 非 JSON 行 — 可能是错误信息（限流、模型不可用等）
                 non_json = line.strip()
