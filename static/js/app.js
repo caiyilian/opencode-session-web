@@ -119,6 +119,25 @@ function populateModelSelectors() {
 
 function filterModels() { populateModelSelectors(); }
 
+function showProviderManager() {
+  const providers = getUniqueProviders();
+  const blocked = getBlockedProviders();
+  let html = '<div class="modal-overlay" id="providerModal" onclick="if(event.target===this)closeProviderManager()" style="display:flex"><div class="modal"><h2>&#128220; 管理提供者</h2><p style="font-size:12px;color:var(--text-dim);margin-bottom:12px">勾选的提供者将被隐藏</p>';
+  for (const p of providers) {
+    const checked = blocked.includes(p) ? 'checked' : '';
+    html += '<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:13px;cursor:pointer"><input type="checkbox" ' + checked + ' onchange="toggleBlockProvider(\'' + p + '\')" style="accent-color:var(--accent)"> ' + p + '</label>';
+  }
+  html += '<div class="modal-actions" style="margin-top:12px"><button class="btn-primary" onclick="closeProviderManager()">确定</button></div></div></div>';
+  const existing = document.getElementById('providerModal');
+  if (existing) existing.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+function closeProviderManager() {
+  const el = document.getElementById('providerModal');
+  if (el) el.remove();
+}
+
 function getBlockedProviders() {
   try { return JSON.parse(localStorage.getItem('blockedProviders') || '[]'); }
   catch (e) { return []; }
