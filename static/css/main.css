@@ -120,6 +120,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
                        font-family: inherit; }
 .model-filter-input:focus { border-color: var(--accent); }
 .model-filter-input::placeholder { color: var(--text-dim); }
+.model-filter-row { display: flex; gap: 2px; align-items: center; }
+.provider-btn { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; }
+.provider-btn:hover { color: var(--accent); background: var(--bg-hover); }
 .model-select:focus { border-color: var(--accent); }
 .input-area textarea { flex: 1; padding: 10px 14px; border: 1px solid var(--border);
                         border-radius: var(--radius); background: var(--bg3); color: var(--text);
