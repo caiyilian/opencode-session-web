@@ -702,8 +702,10 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                 elif event_type == "step_start":
                     yield "event: status\ndata: step_start\n\n"
                 elif event_type == "step_finish":
+                    reason = part.get("reason", "")
                     tokens = part.get("tokens", {})
-                    yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
+                    if reason == "stop":
+                        yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
                 elif event_type and event_type not in ("step_start", "step_finish"):
                     # 未知事件类型 — 记录日志
                     import sys
