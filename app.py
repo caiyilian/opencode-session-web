@@ -1038,7 +1038,7 @@ def api_session_new():
                 had_error = True
                 yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
 
-            stderr_thread.join(timeout=2)
+            stderr_thread2.join(timeout=2)
 
         except FileNotFoundError:
             had_error = True

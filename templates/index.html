@@ -79,9 +79,12 @@
     <!-- Input area (Phase 2) -->
     <div class="input-area" id="inputArea">
       <div class="input-row">
-        <select class="model-select" id="modelSelect" onchange="currentModel=this.value">
-          <option value="">默认模型</option>
-        </select>
+        <div class="model-select-wrap">
+          <input class="model-filter-input" id="modelFilter" placeholder="搜索模型..." oninput="filterModels()">
+          <select class="model-select" id="modelSelect" onchange="currentModel=this.value">
+            <option value="">默认模型</option>
+          </select>
+        </div>
         <textarea id="msgInput" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)" onkeydown="onInputKeydown(event)" rows="1"></textarea>
         <button class="send-btn" id="sendBtn" onclick="sendMessage()">发送</button>
       </div>

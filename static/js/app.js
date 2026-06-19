@@ -99,11 +99,15 @@ function renderMarkdown(text) {
 }
 
 function populateModelSelectors() {
+  const blocked = getBlockedProviders();
+  const filterText = (document.getElementById('modelFilter')?.value || '').toLowerCase();
   const selects = document.querySelectorAll('.model-select');
   for (const sel of selects) {
     const current = sel.value;
     sel.innerHTML = '<option value="">\u9ed8\u8ba4\u6a21\u578b</option>';
     for (const m of allModels) {
+      if (blocked.some(p => m.startsWith(p))) continue;
+      if (filterText && !m.toLowerCase().includes(filterText)) continue;
       const opt = document.createElement('option');
       opt.value = m;
       opt.textContent = m;
@@ -111,6 +115,30 @@ function populateModelSelectors() {
       sel.appendChild(opt);
     }
   }
+}
+
+function filterModels() { populateModelSelectors(); }
+
+function getBlockedProviders() {
+  try { return JSON.parse(localStorage.getItem('blockedProviders') || '[]'); }
+  catch (e) { return []; }
+}
+
+function toggleBlockProvider(provider) {
+  let b = getBlockedProviders();
+  const i = b.indexOf(provider);
+  i >= 0 ? b.splice(i, 1) : b.push(provider);
+  localStorage.setItem('blockedProviders', JSON.stringify(b));
+  populateModelSelectors();
+}
+
+function getUniqueProviders() {
+  const s = new Set();
+  for (const m of allModels) {
+    const p = m.split('/')[0];
+    if (p) s.add(p + '/');
+  }
+  return [...s].sort();
 }
 
 // ── Sidebar ──
