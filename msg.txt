@@ -1,0 +1,7 @@
+fix: parallelize init API calls, defer model loading after sidebar render
+
+- Use Promise.all to parallelize stats/directories/sessions requests
+- Move available-models (slow CLI subprocess) to after sidebar render
+- Sidebar now renders immediately, model dropdown populates later
+
+Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>
