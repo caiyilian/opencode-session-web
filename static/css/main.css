@@ -123,6 +123,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .model-filter-row { display: flex; gap: 2px; align-items: center; }
 .provider-btn { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; }
 .provider-btn:hover { color: var(--accent); background: var(--bg-hover); }
+.provider-item { display: flex; align-items: center; gap: 6px; padding: 4px 0; font-size: 13px; cursor: pointer; line-height: 1.4; }
+.provider-cb { accent-color: var(--accent); }
 .model-select:focus { border-color: var(--accent); }
 .input-area textarea { flex: 1; padding: 10px 14px; border: 1px solid var(--border);
                         border-radius: var(--radius); background: var(--bg3); color: var(--text);
