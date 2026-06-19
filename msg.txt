@@ -1,0 +1,3 @@
+fix: escaped backticks and dollar signs in template literals
+
+Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>
