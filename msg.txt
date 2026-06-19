@@ -1,7 +1,0 @@
-fix: restore missing populateModelSelectors function
-
-The function was accidentally deleted during a patch operation,
-causing model dropdown to remain empty with only manually added
-"(当前)" options visible.
-
-Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>
