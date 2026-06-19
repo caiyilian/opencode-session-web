@@ -1,0 +1,7 @@
+fix: only send SSE done event on final step_finish (reason=stop)
+
+Intermediate step_finish events (reason=tool-calls) no longer trigger
+premature done event, which was closing EventSource and hiding tool
+call results. Only the final step (reason=stop) sends done.
+
+Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>

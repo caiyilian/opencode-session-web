@@ -250,6 +250,7 @@ function onSearch() {
 
 // ── Open session ──
 async function openSession(id) {
+  if (eventSource) { eventSource.close(); eventSource = null; }
   currentSessionId = id;
   closeSidebar();
   renderSidebar();
