@@ -1,6 +1,0 @@
-feat: add model selector to new session modal
-
-- Add model dropdown in modal, populated from allModels list
-- startNewSession reads from modal's select instead of global currentModel
-
-Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>
