@@ -654,6 +654,18 @@ function showNewSessionModal() {
   dirSelect.appendChild(customOpt);
 
   document.getElementById('newSessionMsg').value = '';
+  // Populate model dropdown
+  const modelSel = document.getElementById('newSessionModel');
+  if (modelSel && allModels.length > 0) {
+    modelSel.innerHTML = '<option value="">默认模型</option>';
+    for (const m of allModels) {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      if (m === currentModel) opt.selected = true;
+      modelSel.appendChild(opt);
+    }
+  }
   document.getElementById('newSessionSubmit').disabled = false;
   modal.classList.add('show');
   setTimeout(() => document.getElementById('newSessionMsg').focus(), 100);
@@ -666,6 +678,7 @@ function closeNewSessionModal() {
 function startNewSession() {
   const dirSelect = document.getElementById('newSessionDir');
   const msgInput = document.getElementById('newSessionMsg');
+  const modelSelect = document.getElementById('newSessionModel');
   const submitBtn = document.getElementById('newSessionSubmit');
 
   let directory = dirSelect.value;
@@ -717,7 +730,7 @@ function startNewSession() {
   fetch('/api/sessions/new', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ directory, message, model: currentModel || undefined }),
+    body: JSON.stringify({ directory, message, model: modelSelect.value || undefined }),
   }).then(async (response) => {
     if (!response.ok) {
       const err = await response.json();
