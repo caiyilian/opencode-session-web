@@ -148,7 +148,7 @@ async function init() {
   } catch (e) {
     // 静默失败，模型切换功能不可用
   }
-
+}
 
 // ── Render sidebar ──
 function renderSidebar() {
