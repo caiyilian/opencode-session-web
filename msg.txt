@@ -1,0 +1,3 @@
+fix: stderr_thread NameError + model search and provider filter
+
+Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>
