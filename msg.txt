@@ -1,0 +1,3 @@
+fix: checkbox alignment in provider manager
+
+Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>
