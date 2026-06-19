@@ -125,7 +125,7 @@ function showProviderManager() {
   let html = '<div class="modal-overlay" id="providerModal" onclick="if(event.target===this)closeProviderManager()" style="display:flex"><div class="modal"><h2>&#128220; 管理提供者</h2><p style="font-size:12px;color:var(--text-dim);margin-bottom:12px">勾选的提供者将被隐藏</p>';
   for (const p of providers) {
     const checked = blocked.includes(p) ? 'checked' : '';
-    html += '<label class="provider-item"><input type="checkbox" class="provider-cb" ' + checked + ' onchange="toggleBlockProvider(\'' + p + '\')"> ' + p + '</label>';
+    html += '<label class="provider-item"><input type="checkbox" class="provider-cb" ' + checked + ' onchange="toggleBlockProvider(\'' + p + '\')"><span class="provider-text">' + p + '</span></label>';
   }
   html += '<div class="modal-actions" style="margin-top:12px"><button class="btn-cancel" onclick="closeProviderManager()">关闭</button></div></div></div>';
   const existing = document.getElementById('providerModal');
