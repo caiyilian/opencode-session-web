@@ -1,3 +1,0 @@
-fix: provider checkbox alignment
-
-Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>
