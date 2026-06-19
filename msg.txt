@@ -1,0 +1,10 @@
+fix: forward error-type events from opencode CLI as stream_error SSE
+
+Opencode CLI can return {"type":"error","error":{"message":"..."}}
+events (e.g., model not found, provider errors). These were being
+silently logged as "unknown event_type" and never reaching the
+frontend, leaving the user stuck at "思考中...".
+
+Now error events are extracted and forwarded as stream_error SSE.
+
+Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>
