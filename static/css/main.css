@@ -380,3 +380,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .error-msg { background: #ff52521a; border: 1px solid #ff525240; border-radius: 6px;
              padding: 10px 14px; color: #ff8a80; font-size: 13px; white-space: pre-wrap;
              word-break: break-word; max-height: 200px; overflow-y: auto; }
+
+.provider-list { max-height: 300px; overflow-y: auto; margin: 4px 0; }
+.provider-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; cursor: pointer; border-radius: 4px; font-size: 13px; transition: background .1s; }
+.provider-item:hover { background: var(--bg-hover); }
+.provider-item input { accent-color: var(--accent); }
+.provider-item span { color: var(--text); }
