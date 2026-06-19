@@ -1,0 +1,3 @@
+fix: checkbox alignment take 2
+
+Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>
