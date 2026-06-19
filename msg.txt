@@ -1,7 +1,0 @@
-feat: add session deletion with DELETE button on each session
-
-- Backend: DELETE /api/sessions/<id> removes session + messages + parts
-- Frontend: ✕ button on each session item (visible on hover), confirmed with confirm()
-- Refresh sidebar after delete, return to list if current session deleted
-
-Co-Authored-By: AtomCode (deepseek-v4-flash) <noreply@atomgit.com>
