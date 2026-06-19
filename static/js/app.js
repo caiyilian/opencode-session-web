@@ -98,6 +98,21 @@ function renderMarkdown(text) {
   return escHtml(text).replace(/\n/g, '<br>');
 }
 
+function populateModelSelectors() {
+  const selects = document.querySelectorAll('.model-select');
+  for (const sel of selects) {
+    const current = sel.value;
+    sel.innerHTML = '<option value="">\u9ed8\u8ba4\u6a21\u578b</option>';
+    for (const m of allModels) {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      if (m === current) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  }
+}
+
 // ── Sidebar ──
 function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
