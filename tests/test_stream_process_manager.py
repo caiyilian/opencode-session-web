@@ -186,6 +186,28 @@ def test_new_session_stream_terminates_process_manager_on_error(monkeypatch, tmp
     assert manager.unregistered == [process]
 
 
+def test_new_session_stream_formats_non_json_known_error(monkeypatch, tmp_path):
+    process = FakeStreamProcess(["quota exceeded\n"])
+    manager = FakeStreamProcessManager(process)
+    monkeypatch.setattr(webapp, "process_manager", manager)
+    app = webapp.create_app({"TESTING": True})
+
+    with app.test_client() as client:
+        response = client.post(
+            "/api/sessions/new",
+            json={"directory": str(tmp_path), "message": "hello"},
+            buffered=True,
+        )
+
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert "event: stream_error" in body
+    assert "模型额度或速率已受限" in body
+    assert "quota exceeded" in body
+    assert manager.terminated == [(process, 2)]
+    assert manager.unregistered == [process]
+
+
 def test_fork_session_stream_uses_process_manager_for_normal_exit(monkeypatch, tmp_path):
     db_path = tmp_path / "opencode.db"
     create_session_db(db_path, tmp_path)
