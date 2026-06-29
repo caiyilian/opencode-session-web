@@ -11,8 +11,8 @@ import sqlite3
 import queue
 import threading
 import time
-from pathlib import Path
 from flask import Flask, jsonify, request, render_template, Response, stream_with_context
+from config import AppConfig
 from logging_config import configure_logging
 
 app = Flask(__name__)
@@ -20,12 +20,29 @@ logger = configure_logging()
 
 # ── 数据库路径 ──────────────────────────────────────────────
 
-DB_PATH = os.path.expanduser("~/.local/share/opencode/opencode.db")
+DEFAULT_CONFIG = AppConfig.from_env()
+app.config.update(DEFAULT_CONFIG.to_flask_config())
+DB_PATH = app.config["OPENCODE_DB_PATH"]
+
+
+def create_app(test_config=None):
+    """Configure and return the Flask app.
+
+    The route table is still module-level in this phase. Returning the global app
+    keeps behavior stable while giving tests and later refactors a single config
+    injection point.
+    """
+    global DB_PATH
+    app.config.update(AppConfig.from_env().to_flask_config())
+    if test_config:
+        app.config.update(test_config)
+    DB_PATH = app.config["OPENCODE_DB_PATH"]
+    return app
 
 
 def get_db():
     """获取数据库连接（每次请求独立，避免线程问题）"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(app.config.get("OPENCODE_DB_PATH", DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -1539,14 +1556,16 @@ def index():
 if __name__ == "__main__":
     import sys
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
+    flask_app = create_app()
+    db_path = flask_app.config["OPENCODE_DB_PATH"]
 
-    if not os.path.isfile(DB_PATH):
-        logger.error("database not found: %s", DB_PATH)
+    if not os.path.isfile(db_path):
+        logger.error("database not found: %s", db_path)
         logger.error("please run OpenCode first and ensure session records exist")
         sys.exit(1)
 
     logger.info("OpenCode session viewer starting")
-    logger.info("database: %s", DB_PATH)
+    logger.info("database: %s", db_path)
     logger.info("url: http://127.0.0.1:%s", port)
 
-    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
+    flask_app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
