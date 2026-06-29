@@ -123,12 +123,14 @@ def _create_db(path, *, old_usage_columns: bool):
 
 
 @pytest.fixture(params=[True, False], ids=["old-session-usage-columns", "new-part-usage"])
-def client(tmp_path, monkeypatch, request):
+def client(tmp_path, request):
     db_path = tmp_path / "opencode.db"
     _create_db(db_path, old_usage_columns=request.param)
-    monkeypatch.setattr(webapp, "DB_PATH", str(db_path))
-    webapp.app.config.update(TESTING=True)
-    with webapp.app.test_client() as test_client:
+    app = webapp.create_app({
+        "TESTING": True,
+        "OPENCODE_DB_PATH": str(db_path),
+    })
+    with app.test_client() as test_client:
         yield test_client, request.param
 
 
@@ -136,6 +138,21 @@ def _expected_usage(old_usage_columns: bool):
     if old_usage_columns:
         return {"cost": 1.5, "input": 107, "output": 53}
     return {"cost": 0.3, "input": 13, "output": 7}
+
+
+def test_create_app_applies_database_config(tmp_path):
+    db_path = tmp_path / "configured.db"
+    _create_db(db_path, old_usage_columns=False)
+
+    app = webapp.create_app({
+        "TESTING": True,
+        "OPENCODE_DB_PATH": str(db_path),
+    })
+
+    assert app.config["OPENCODE_DB_PATH"] == str(db_path)
+    assert webapp.DB_PATH == str(db_path)
+    with app.test_client() as test_client:
+        assert test_client.get("/api/stats").status_code == 200
 
 
 def test_stats_schema_compatible(client):
