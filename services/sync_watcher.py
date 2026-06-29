@@ -10,6 +10,8 @@ class SessionSnapshot:
     title: str
     directory: str
     time_updated: int
+    message_count: int = 0
+    part_count: int = 0
 
     def to_dict(self) -> dict[str, str | int]:
         return {
@@ -37,10 +39,26 @@ class SessionChange:
 
 
 def fetch_session_snapshots(conn) -> dict[str, SessionSnapshot]:
+    message_count_sql = "0"
+    if _has_table_column(conn, "message", "session_id"):
+        message_count_sql = "(SELECT COUNT(*) FROM message m WHERE m.session_id = s.id)"
+
+    part_count_sql = "0"
+    if _has_table_column(conn, "part", "session_id"):
+        part_count_sql = "(SELECT COUNT(*) FROM part p WHERE p.session_id = s.id)"
+    elif _has_table_column(conn, "part", "message_id") and _has_table_column(conn, "message", "session_id"):
+        part_count_sql = (
+            "(SELECT COUNT(*) FROM part p "
+            "JOIN message m ON m.id = p.message_id "
+            "WHERE m.session_id = s.id)"
+        )
+
     rows = conn.execute(
-        """SELECT id, title, directory, time_updated
-           FROM session
-           ORDER BY time_updated DESC"""
+        f"""SELECT s.id, s.title, s.directory, s.time_updated,
+                   {message_count_sql} AS message_count,
+                   {part_count_sql} AS part_count
+            FROM session s
+            ORDER BY s.time_updated DESC"""
     ).fetchall()
     return {
         row["id"]: SessionSnapshot(
@@ -48,6 +66,8 @@ def fetch_session_snapshots(conn) -> dict[str, SessionSnapshot]:
             title=row["title"] or "",
             directory=row["directory"] or "",
             time_updated=row["time_updated"] or 0,
+            message_count=row["message_count"] or 0,
+            part_count=row["part_count"] or 0,
         )
         for row in rows
     }
@@ -76,3 +96,24 @@ def diff_session_snapshots(
 def _change_sort_key(change: SessionChange) -> tuple[int, str, str]:
     order = {"created": 0, "updated": 1, "deleted": 2}
     return (order.get(change.type, 99), change.session.id, change.type)
+
+
+def _has_table_column(conn, table: str, column: str) -> bool:
+    if not _has_table(conn, table):
+        return False
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(_pragma_column_name(row) == column for row in rows)
+
+
+def _has_table(conn, table: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone() is not None
+
+
+def _pragma_column_name(row) -> str:
+    try:
+        return row["name"]
+    except (IndexError, TypeError):
+        return row[1]
