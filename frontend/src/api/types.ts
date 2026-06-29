@@ -93,7 +93,11 @@ export type MessagePart =
       input?: string;
       description?: string;
       output?: string;
+      status?: string;
       is_hidden?: boolean;
+      time_created_raw?: number;
+      time_updated_raw?: number;
+      duration_ms?: number;
     }
   | {
       type: "tool_result";
@@ -101,6 +105,9 @@ export type MessagePart =
       content?: string;
       status?: string;
       is_hidden?: boolean;
+      time_created_raw?: number;
+      time_updated_raw?: number;
+      duration_ms?: number;
     }
   | {
       type: "step-finish";
