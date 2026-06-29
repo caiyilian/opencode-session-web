@@ -20,6 +20,31 @@ def test_fetch_session_snapshots_reads_lightweight_session_rows(tmp_path):
     assert snapshots["ses_2"] == SessionSnapshot("ses_2", "", "", 0)
 
 
+def test_fetch_session_snapshots_counts_messages_and_parts(tmp_path):
+    db_path = tmp_path / "opencode.db"
+    conn = _connect(db_path)
+    _create_session_table(conn)
+    _create_message_table(conn)
+    _create_part_table(conn)
+    _insert_session(conn, "ses_1", "One", "C:/repo/one", 100)
+    _insert_message(conn, "msg_1", "ses_1")
+    _insert_message(conn, "msg_2", "ses_1")
+    _insert_part(conn, "part_1", "msg_1", "ses_1")
+    _insert_part(conn, "part_2", "msg_1", "ses_1")
+    _insert_part(conn, "part_3", "msg_2", "ses_1")
+
+    snapshots = fetch_session_snapshots(conn)
+
+    assert snapshots["ses_1"] == SessionSnapshot(
+        "ses_1",
+        "One",
+        "C:/repo/one",
+        100,
+        message_count=2,
+        part_count=3,
+    )
+
+
 def test_diff_session_snapshots_detects_created_updated_and_deleted():
     previous = {
         "ses_old": SessionSnapshot("ses_old", "Old", "C:/repo/old", 100),
@@ -48,6 +73,29 @@ def test_diff_session_snapshots_detects_created_updated_and_deleted():
     }
 
 
+def test_diff_session_snapshots_detects_message_and_part_count_changes():
+    previous = {
+        "ses_message": SessionSnapshot("ses_message", "Same", "C:/repo", 100, message_count=1, part_count=1),
+        "ses_part": SessionSnapshot("ses_part", "Same", "C:/repo", 100, message_count=1, part_count=1),
+    }
+    current = {
+        "ses_message": SessionSnapshot("ses_message", "Same", "C:/repo", 100, message_count=2, part_count=1),
+        "ses_part": SessionSnapshot("ses_part", "Same", "C:/repo", 100, message_count=1, part_count=2),
+    }
+
+    changes = diff_session_snapshots(previous, current)
+
+    assert [change.type for change in changes] == ["updated", "updated"]
+    assert [change.session.id for change in changes] == ["ses_message", "ses_part"]
+    assert changes[0].previous == previous["ses_message"]
+    assert changes[0].to_dict()["session"] == {
+        "id": "ses_message",
+        "title": "Same",
+        "directory": "C:/repo",
+        "time_updated": 100,
+    }
+
+
 def test_diff_session_snapshots_returns_empty_for_same_snapshot():
     snapshot = SessionSnapshot("ses_1", "Same", "C:/repo", 100)
 
@@ -72,9 +120,46 @@ def _create_session_table(conn):
     conn.commit()
 
 
+def _create_message_table(conn):
+    conn.execute(
+        """CREATE TABLE message (
+            id TEXT PRIMARY KEY,
+            session_id TEXT
+        )"""
+    )
+    conn.commit()
+
+
+def _create_part_table(conn):
+    conn.execute(
+        """CREATE TABLE part (
+            id TEXT PRIMARY KEY,
+            message_id TEXT,
+            session_id TEXT
+        )"""
+    )
+    conn.commit()
+
+
 def _insert_session(conn, session_id, title, directory, time_updated):
     conn.execute(
         "INSERT INTO session (id, title, directory, time_updated) VALUES (?, ?, ?, ?)",
         (session_id, title, directory, time_updated),
+    )
+    conn.commit()
+
+
+def _insert_message(conn, message_id, session_id):
+    conn.execute(
+        "INSERT INTO message (id, session_id) VALUES (?, ?)",
+        (message_id, session_id),
+    )
+    conn.commit()
+
+
+def _insert_part(conn, part_id, message_id, session_id):
+    conn.execute(
+        "INSERT INTO part (id, message_id, session_id) VALUES (?, ?, ?)",
+        (part_id, message_id, session_id),
     )
     conn.commit()
