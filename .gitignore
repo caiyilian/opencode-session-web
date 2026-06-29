@@ -34,3 +34,4 @@ Thumbs.db
 stderr.txt
 stdout.txt
 msg.txt
+.pytest-tmp/
