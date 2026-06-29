@@ -39,6 +39,11 @@ export interface NewSessionStreamRequest {
   model?: string;
 }
 
+export interface ForkSessionStreamRequest {
+  message: string;
+  model?: string;
+}
+
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -84,6 +89,19 @@ export function getSessionStreamUrl(sessionId: string, query: SessionStreamQuery
 
 export function createNewSessionStream(payload: NewSessionStreamRequest, signal?: AbortSignal) {
   return fetch("/api/sessions/new", {
+    method: "POST",
+    headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
+export function createForkSessionStream(
+  sessionId: string,
+  payload: ForkSessionStreamRequest,
+  signal?: AbortSignal,
+) {
+  return fetch(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, {
     method: "POST",
     headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
     body: JSON.stringify(payload),

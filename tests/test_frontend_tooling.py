@@ -67,6 +67,8 @@ def test_react_app_loads_core_api_data():
     assert "SessionActions" in app_source
     assert "deleteSession" in app_source
     assert "undoSession" in app_source
+    assert "ForkSessionPanel" in app_source
+    assert "createForkSessionStream" in app_source
     assert "ToolCard" in app_source
     assert "ToolSection" in app_source
     assert "Prism.highlight" in app_source
