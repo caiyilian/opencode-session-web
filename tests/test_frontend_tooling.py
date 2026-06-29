@@ -58,6 +58,8 @@ def test_react_app_loads_core_api_data():
     assert "SessionComposer" in app_source
     assert "NewSessionPanel" in app_source
     assert "createNewSessionStream" in app_source
+    assert "ToolCard" in app_source
+    assert "ToolSection" in app_source
     assert "EventSource" in app_source
     assert "ReactMarkdown" in app_source
     assert "remarkGfm" in app_source
