@@ -4,6 +4,7 @@ import {
   apiRequest,
   deleteSession,
   getSession,
+  getSessionStreamUrl,
   getSessions,
   undoSession,
 } from "./client";
@@ -54,6 +55,21 @@ describe("api client", () => {
       3,
       "/api/sessions/ses%2Fwith%20space/undo",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("builds session stream URLs with encoded message and optional model", () => {
+    expect(
+      getSessionStreamUrl("ses/with space", {
+        message: "hello world\nnext",
+        model: "provider/model",
+      }),
+    ).toBe(
+      "/api/sessions/ses%2Fwith%20space/stream?message=hello+world%0Anext&model=provider%2Fmodel",
+    );
+
+    expect(getSessionStreamUrl("ses_1", { message: "hello", model: "" })).toBe(
+      "/api/sessions/ses_1/stream?message=hello",
     );
   });
 

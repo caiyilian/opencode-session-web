@@ -27,6 +27,11 @@ export interface SessionsQuery {
   offset?: number;
 }
 
+export interface SessionStreamQuery {
+  message: string;
+  model?: string;
+}
+
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -59,6 +64,10 @@ export function getSessions(query: SessionsQuery = {}) {
 
 export function getSession(sessionId: string) {
   return apiRequest<SessionDetailResponse>(`/api/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export function getSessionStreamUrl(sessionId: string, query: SessionStreamQuery) {
+  return `/api/sessions/${encodeURIComponent(sessionId)}/stream${queryString(query)}`;
 }
 
 export function getAvailableModels() {
