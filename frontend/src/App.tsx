@@ -1,4 +1,13 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import Prism from "prismjs";
+import "prismjs/components/prism-bash";
+import "prismjs/components/prism-css";
+import "prismjs/components/prism-diff";
+import "prismjs/components/prism-json";
+import "prismjs/components/prism-jsx";
+import "prismjs/components/prism-markup";
+import "prismjs/components/prism-tsx";
+import "prismjs/components/prism-typescript";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -1258,12 +1267,16 @@ function ToolCard({
       {hasBody ? (
         <div className="tool-card-body">
           {description && <div className="tool-description">{description}</div>}
-          {input && <ToolSection label="Input" value={input} />}
+          {input && <ToolSection label="Input" tool={name} value={input} />}
           {hidden ? (
             <div className="tool-hidden-output">Output is hidden or truncated.</div>
           ) : (
             output && (
-              <ToolSection label={variant === "call" ? "Output" : "Result"} value={output} />
+              <ToolSection
+                label={variant === "call" ? "Output" : "Result"}
+                tool={name}
+                value={output}
+              />
             )
           )}
         </div>
@@ -1274,13 +1287,13 @@ function ToolCard({
   );
 }
 
-function ToolSection({ label, value }: { label: string; value: string }) {
+function ToolSection({ label, tool, value }: { label: string; tool: string; value: string }) {
+  const language = inferToolLanguage(tool, label, value);
+
   return (
     <section className="tool-section">
       <div>{label}</div>
-      <pre className="part-code">
-        <code>{value}</code>
-      </pre>
+      <HighlightedCodeBlock language={language} value={value} />
     </section>
   );
 }
@@ -1290,8 +1303,46 @@ function MarkdownContent({ source }: { source: string }) {
 
   return (
     <div className="markdown-content">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{source}</ReactMarkdown>
+      <ReactMarkdown
+        components={{
+          code({ children, className, ...props }) {
+            const value = String(children ?? "");
+            const language = languageFromClassName(className);
+            const inline = !className;
+
+            if (inline) {
+              return (
+                <code {...props} className="inline-code">
+                  {children}
+                </code>
+              );
+            }
+
+            return <HighlightedCodeBlock language={language} value={value.replace(/\n$/, "")} />;
+          },
+        }}
+        remarkPlugins={[remarkGfm]}
+      >
+        {source}
+      </ReactMarkdown>
     </div>
+  );
+}
+
+function HighlightedCodeBlock({ language, value }: { language: string; value: string }) {
+  const highlighted = highlightCode(value, language);
+
+  return (
+    <pre className={`part-code syntax-code language-${highlighted.language}`}>
+      {highlighted.html ? (
+        <code
+          className={`language-${highlighted.language}`}
+          dangerouslySetInnerHTML={{ __html: highlighted.html }}
+        />
+      ) : (
+        <code>{value}</code>
+      )}
+    </pre>
   );
 }
 
@@ -1341,6 +1392,46 @@ function deriveComposerModelOptions(modelOptions: string[], currentModel: string
   const options = new Set(modelOptions.map(normalizeModelValue).filter(Boolean));
   if (normalizedCurrent) options.add(normalizedCurrent);
   return Array.from(options).sort((a, b) => a.localeCompare(b));
+}
+
+function languageFromClassName(className: string | undefined) {
+  const match = /language-([\w-]+)/.exec(className || "");
+  return normalizeLanguage(match?.[1] || "");
+}
+
+function normalizeLanguage(language: string) {
+  const value = language.toLowerCase();
+  if (value === "js") return "javascript";
+  if (value === "ts") return "typescript";
+  if (value === "tsx") return "tsx";
+  if (value === "jsx") return "jsx";
+  if (value === "sh" || value === "shell" || value === "zsh") return "bash";
+  if (value === "html" || value === "xml" || value === "svg") return value;
+  if (value === "json" || value === "jsonc") return "json";
+  if (value === "diff" || value === "patch") return "diff";
+  if (value === "css") return "css";
+  return value || "text";
+}
+
+function inferToolLanguage(tool: string, label: string, value: string) {
+  const trimmed = value.trim();
+  const normalizedTool = tool.toLowerCase();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return "json";
+  if (normalizedTool.includes("bash")) return "bash";
+  if (normalizedTool.includes("edit") || label.toLowerCase() === "result") return "diff";
+  return "text";
+}
+
+function highlightCode(value: string, language: string) {
+  const normalized = normalizeLanguage(language);
+  const grammar = Prism.languages[normalized];
+  if (!grammar) return { html: "", language: "text" };
+
+  try {
+    return { html: Prism.highlight(value, grammar, normalized), language: normalized };
+  } catch (_) {
+    return { html: "", language: "text" };
+  }
 }
 
 function toolKind(tool: string) {
