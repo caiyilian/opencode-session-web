@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   apiRequest,
+  createNewSessionStream,
   deleteSession,
   getSession,
   getSessionStreamUrl,
@@ -91,6 +92,32 @@ describe("api client", () => {
           Accept: "application/json",
           "Content-Type": "application/json",
           "X-Test": "yes",
+        }),
+      }),
+    );
+  });
+
+  it("posts new session stream requests as JSON", async () => {
+    mockJsonResponse({ ok: true });
+
+    await createNewSessionStream({
+      directory: "C:/repo/app",
+      message: "start here",
+      model: "provider/model",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/sessions/new",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          directory: "C:/repo/app",
+          message: "start here",
+          model: "provider/model",
+        }),
+        headers: expect.objectContaining({
+          Accept: "text/event-stream",
+          "Content-Type": "application/json",
         }),
       }),
     );

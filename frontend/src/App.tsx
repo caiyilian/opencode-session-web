@@ -2,6 +2,7 @@ import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  createNewSessionStream,
   getAvailableModels,
   getDirectories,
   getSession,
@@ -82,7 +83,15 @@ export default function App() {
   const [composerModel, setComposerModel] = useState("");
   const [composerError, setComposerError] = useState("");
   const [streamDraft, setStreamDraft] = useState<StreamDraft | null>(null);
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
+  const [newSessionDirectory, setNewSessionDirectory] = useState("");
+  const [newSessionCustomDirectory, setNewSessionCustomDirectory] = useState("");
+  const [newSessionMessage, setNewSessionMessage] = useState("");
+  const [newSessionModel, setNewSessionModel] = useState("");
+  const [newSessionError, setNewSessionError] = useState("");
+  const [newSessionDraft, setNewSessionDraft] = useState<StreamDraft | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const newSessionAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -129,6 +138,7 @@ export default function App() {
   useEffect(() => {
     return () => {
       eventSourceRef.current?.close();
+      newSessionAbortRef.current?.abort();
     };
   }, []);
 
@@ -219,6 +229,29 @@ export default function App() {
       })
       .catch((error: unknown) => {
         setDetailState({ status: "error", sessionId, message: errorText(error) });
+      });
+  }
+
+  function refreshDashboard(selectSessionId?: string) {
+    return Promise.all([getStats(), getDirectories(), getSessions({ limit: 200 })])
+      .then(([stats, directories, sessions]) => {
+        setLoadState((current) => {
+          const previous = current.status === "ready" ? current.data : null;
+          return {
+            status: "ready",
+            data: {
+              stats,
+              directories: directories.directories,
+              sessions: sessions.sessions,
+              availableModels: previous?.availableModels ?? [],
+              modelLoadError: previous?.modelLoadError,
+            },
+          };
+        });
+        if (selectSessionId) dispatch({ type: "selectSession", value: selectSessionId });
+      })
+      .catch((error: unknown) => {
+        setLoadState({ status: "error", message: errorText(error) });
       });
   }
 
@@ -348,6 +381,149 @@ export default function App() {
         error: "Connection interrupted. Stop and try another model if the model is unavailable.",
       }));
     };
+  }
+
+  function openNewSession() {
+    const preferredDirectory = selectedSession?.directory || data?.directories[0]?.path || "";
+    setNewSessionDirectory(preferredDirectory);
+    setNewSessionCustomDirectory("");
+    setNewSessionMessage("");
+    setNewSessionModel(composerModel);
+    setNewSessionError("");
+    setNewSessionDraft(null);
+    setNewSessionOpen(true);
+  }
+
+  function closeNewSession() {
+    if (isStreamActive(newSessionDraft)) return;
+    setNewSessionOpen(false);
+    setNewSessionError("");
+  }
+
+  function stopNewSession() {
+    newSessionAbortRef.current?.abort();
+    newSessionAbortRef.current = null;
+    setNewSessionDraft((draft) =>
+      draft ? { ...draft, status: "stopped", statusLabel: "Stopped by user" } : draft,
+    );
+  }
+
+  async function submitNewSession() {
+    const directory =
+      newSessionDirectory === "__custom__" ? newSessionCustomDirectory.trim() : newSessionDirectory;
+    const message = newSessionMessage.trim();
+
+    if (!directory) {
+      setNewSessionError("Choose or enter a working directory.");
+      return;
+    }
+    if (!message) {
+      setNewSessionError("Enter the first message.");
+      return;
+    }
+
+    const controller = new AbortController();
+    newSessionAbortRef.current = controller;
+    setNewSessionError("");
+    setNewSessionMessage("");
+
+    const now = Date.now();
+    const streamSessionId = `new-${now}`;
+    setNewSessionDraft({
+      sessionId: streamSessionId,
+      userMessage: {
+        id: `local-new-user-${now}`,
+        role: "user",
+        parts: [{ type: "text", text: message }],
+        time_created: "Just now",
+        time_created_raw: now,
+        tokens: {},
+      },
+      assistantText: "",
+      thinkingText: "",
+      tools: [],
+      status: "connecting",
+      statusLabel: "Connecting",
+    });
+
+    try {
+      const response = await createNewSessionStream(
+        {
+          directory,
+          message,
+          model: normalizeModelValue(newSessionModel),
+        },
+        controller.signal,
+      );
+
+      if (!response.ok) {
+        throw new Error(await responseErrorText(response));
+      }
+      if (!response.body) {
+        throw new Error("Streaming response is unavailable.");
+      }
+
+      let newSessionId = "";
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() ?? "";
+
+        for (const block of blocks) {
+          const event = parseSseBlock(block);
+          if (!event.type) continue;
+
+          if (event.type === "done") {
+            const donePayload = parseDonePayload(event.data);
+            newSessionId = donePayload.session_id || newSessionId;
+            setNewSessionDraft((draft) =>
+              draft ? { ...draft, status: "done", statusLabel: "Done" } : draft,
+            );
+          } else if (event.type === "stream_error") {
+            setNewSessionDraft((draft) =>
+              draft
+                ? {
+                    ...draft,
+                    status: "error",
+                    statusLabel: "Error",
+                    error: streamErrorText(event.data),
+                  }
+                : draft,
+            );
+            return;
+          } else {
+            applyStreamEvent(setNewSessionDraft, streamSessionId, event.type, event.data);
+          }
+        }
+      }
+
+      if (newSessionId) {
+        await refreshDashboard(newSessionId);
+        await reloadSessionDetail(newSessionId, true);
+        setNewSessionOpen(false);
+      }
+    } catch (error) {
+      if ((error as { name?: string }).name === "AbortError") return;
+      setNewSessionDraft((draft) =>
+        draft
+          ? {
+              ...draft,
+              status: "error",
+              statusLabel: "Error",
+              error: errorText(error),
+            }
+          : draft,
+      );
+      setNewSessionError(errorText(error));
+    } finally {
+      if (newSessionAbortRef.current === controller) newSessionAbortRef.current = null;
+    }
   }
 
   return (
@@ -496,6 +672,9 @@ export default function App() {
               <p className="eyebrow">Session Browser</p>
               <h2>{selectedSession?.title || "OpenCode Sessions"}</h2>
             </div>
+            <button className="new-session-button" type="button" onClick={openNewSession}>
+              New Session
+            </button>
           </div>
           {data && (
             <div className="summary-strip" aria-label="Summary">
@@ -510,6 +689,31 @@ export default function App() {
 
         {loadState.status === "loading" && <PanelStatus label="Loading data" />}
         {loadState.status === "error" && <PanelStatus label={loadState.message} tone="error" />}
+        {newSessionOpen && (
+          <NewSessionPanel
+            customDirectory={newSessionCustomDirectory}
+            directories={data?.directories ?? []}
+            directory={newSessionDirectory}
+            draft={newSessionDraft}
+            error={newSessionError}
+            message={newSessionMessage}
+            model={newSessionModel}
+            modelOptions={composerModelOptions}
+            onClose={closeNewSession}
+            onCustomDirectoryChange={setNewSessionCustomDirectory}
+            onDirectoryChange={(value) => {
+              setNewSessionDirectory(value);
+              if (newSessionError) setNewSessionError("");
+            }}
+            onMessageChange={(value) => {
+              setNewSessionMessage(value);
+              if (newSessionError) setNewSessionError("");
+            }}
+            onModelChange={setNewSessionModel}
+            onStop={stopNewSession}
+            onSubmit={submitNewSession}
+          />
+        )}
         {data && (
           <div className="workspace-grid">
             <section className="detail-panel">
@@ -773,6 +977,116 @@ function SessionComposer({
   );
 }
 
+function NewSessionPanel({
+  customDirectory,
+  directories,
+  directory,
+  draft,
+  error,
+  message,
+  model,
+  modelOptions,
+  onClose,
+  onCustomDirectoryChange,
+  onDirectoryChange,
+  onMessageChange,
+  onModelChange,
+  onStop,
+  onSubmit,
+}: {
+  customDirectory: string;
+  directories: DirectorySummary[];
+  directory: string;
+  draft: StreamDraft | null;
+  error: string;
+  message: string;
+  model: string;
+  modelOptions: string[];
+  onClose: () => void;
+  onCustomDirectoryChange: (value: string) => void;
+  onDirectoryChange: (value: string) => void;
+  onMessageChange: (value: string) => void;
+  onModelChange: (value: string) => void;
+  onStop: () => void;
+  onSubmit: () => void;
+}) {
+  const active = isStreamActive(draft);
+
+  return (
+    <section className="new-session-panel" aria-label="New session">
+      <div className="panel-heading">
+        <h3>New Session</h3>
+        <button disabled={active} type="button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+      <div className="new-session-form">
+        <label className="filter-field">
+          <span>Directory</span>
+          <select
+            disabled={active}
+            value={directory}
+            onChange={(event) => onDirectoryChange(event.target.value)}
+          >
+            {directories.map((item) => (
+              <option key={item.path} value={item.path}>
+                {item.name}
+              </option>
+            ))}
+            <option value="__custom__">Custom path</option>
+          </select>
+        </label>
+        {directory === "__custom__" && (
+          <input
+            disabled={active}
+            placeholder="Working directory path"
+            value={customDirectory}
+            onChange={(event) => onCustomDirectoryChange(event.target.value)}
+          />
+        )}
+        <label className="filter-field">
+          <span>Model</span>
+          <select disabled={active} value={model} onChange={(event) => onModelChange(event.target.value)}>
+            <option value="">Default model</option>
+            {modelOptions.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+        <textarea
+          disabled={active}
+          placeholder="Start a new session"
+          rows={4}
+          value={message}
+          onChange={(event) => onMessageChange(event.target.value)}
+        />
+        <div className="composer-actions">
+          {error && <span className="composer-error">{error}</span>}
+          {draft?.error && <span className="composer-error">{draft.error}</span>}
+          <div className="composer-buttons">
+            {active && (
+              <button className="secondary-button" type="button" onClick={onStop}>
+                Stop
+              </button>
+            )}
+            <button disabled={active} type="button" onClick={onSubmit}>
+              Start
+            </button>
+          </div>
+        </div>
+      </div>
+      {draft && (
+        <div className="new-session-preview">
+          <MessageCard index={0} message={draft.userMessage} />
+          <StreamingMessageCard draft={draft} />
+        </div>
+      )}
+    </section>
+  );
+}
+
 function StreamingMessageCard({ draft }: { draft: StreamDraft }) {
   return (
     <article className={`message-card assistant streaming ${draft.status}`}>
@@ -991,6 +1305,52 @@ function deriveComposerModelOptions(modelOptions: string[], currentModel: string
   return Array.from(options).sort((a, b) => a.localeCompare(b));
 }
 
+function applyStreamEvent(
+  setDraft: React.Dispatch<React.SetStateAction<StreamDraft | null>>,
+  sessionId: string,
+  type: string,
+  data: string,
+) {
+  setDraft((current) => {
+    if (!current || current.sessionId !== sessionId) return current;
+
+    if (type === "thinking") {
+      return {
+        ...current,
+        status: "streaming",
+        statusLabel: "Thinking",
+        thinkingText: appendStreamText(current.thinkingText, data),
+      };
+    }
+    if (type === "text") {
+      return {
+        ...current,
+        status: "streaming",
+        statusLabel: "Streaming",
+        assistantText: appendStreamText(current.assistantText, data),
+      };
+    }
+    if (type === "tool_use") {
+      return {
+        ...current,
+        status: "streaming",
+        statusLabel: "Using tool",
+        tools: [...current.tools, toolLabel(data)],
+      };
+    }
+    if (type === "tool_result") {
+      return { ...current, status: "streaming", statusLabel: "Processing tool result" };
+    }
+    if (type === "status") {
+      return {
+        ...current,
+        statusLabel: data === "waiting" ? "Waiting for model" : "Thinking",
+      };
+    }
+    return current;
+  });
+}
+
 function deriveProviderOptions(models: string[]) {
   return Array.from(new Set(models.map(providerForModel).filter(Boolean))).sort((a, b) =>
     a.localeCompare(b),
@@ -1040,6 +1400,39 @@ function streamErrorText(data: string) {
   } catch (_) {
     return data || "Stream failed";
   }
+}
+
+function parseSseBlock(block: string) {
+  let type = "";
+  const data: string[] = [];
+
+  for (const line of block.split("\n")) {
+    if (line.startsWith("event: ")) type = line.slice(7);
+    if (line.startsWith("data: ")) data.push(line.slice(6));
+  }
+
+  return { type, data: data.join("\n") };
+}
+
+function parseDonePayload(data: string): { session_id?: string } {
+  try {
+    return JSON.parse(data || "{}") as { session_id?: string };
+  } catch (_) {
+    return {};
+  }
+}
+
+async function responseErrorText(response: Response) {
+  try {
+    const payload = (await response.json()) as { error?: unknown };
+    return stringValue(payload.error) || response.statusText;
+  } catch (_) {
+    return response.statusText;
+  }
+}
+
+function isStreamActive(draft: StreamDraft | null) {
+  return draft?.status === "connecting" || draft?.status === "streaming";
 }
 
 function readHiddenProviders() {
