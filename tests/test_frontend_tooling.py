@@ -62,6 +62,8 @@ def test_react_app_loads_core_api_data():
     assert "createNewSessionStream" in app_source
     assert "StatsPanel" in app_source
     assert "StatsRankList" in app_source
+    assert "ComparePanel" in app_source
+    assert "compareSessions" in app_source
     assert "ToolCard" in app_source
     assert "ToolSection" in app_source
     assert "Prism.highlight" in app_source
