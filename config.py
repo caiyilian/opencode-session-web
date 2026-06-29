@@ -9,6 +9,8 @@ class AppConfig:
     opencode_stream_timeout: int
     opencode_idle_timeout: int
     log_dir: str
+    use_frontend_dist: bool
+    frontend_dist_dir: str
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -22,6 +24,12 @@ class AppConfig:
                 "OPENCODE_WEB_LOG_DIR",
                 str(Path.home() / ".opencode-session-web" / "logs"),
             ),
+            use_frontend_dist=os.environ.get("OPENCODE_USE_FRONTEND_DIST", "").lower()
+            in {"1", "true", "yes", "on"},
+            frontend_dist_dir=os.environ.get(
+                "OPENCODE_FRONTEND_DIST_DIR",
+                str(Path(__file__).resolve().parent / "frontend" / "dist"),
+            ),
         )
 
     def to_flask_config(self) -> dict:
@@ -30,4 +38,6 @@ class AppConfig:
             "OPENCODE_STREAM_TIMEOUT": self.opencode_stream_timeout,
             "OPENCODE_IDLE_TIMEOUT": self.opencode_idle_timeout,
             "OPENCODE_WEB_LOG_DIR": self.log_dir,
+            "OPENCODE_USE_FRONTEND_DIST": self.use_frontend_dist,
+            "OPENCODE_FRONTEND_DIST_DIR": self.frontend_dist_dir,
         }
