@@ -51,3 +51,45 @@ test("browses, searches, opens a session, and keeps composer reachable", async (
   );
   expect(isOverflowing).toBe(false);
 });
+
+test("compares sessions and shows validation and empty-state feedback", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Detailed compare coverage runs in desktop");
+
+  await page.goto("/");
+  await expect(page.locator(".session-row")).toHaveCount(3);
+
+  const comparePanel = page.locator(".compare-panel");
+  await comparePanel.locator("select").nth(0).selectOption("ses_alpha");
+  await comparePanel.locator("select").nth(1).selectOption("ses_beta");
+  await comparePanel.getByRole("button", { name: "Compare" }).click();
+  await expect(comparePanel.locator(".compare-grid")).toContainText("Alpha release planning");
+  await expect(comparePanel.locator(".compare-grid")).toContainText("Beta error followup");
+  await expect(comparePanel.locator(".compare-grid")).toContainText("Alpha release is ready");
+
+  await comparePanel.locator("select").nth(1).selectOption("ses_alpha");
+  await comparePanel.getByRole("button", { name: "Compare" }).click();
+  await expect(comparePanel.locator(".panel-status.error")).toHaveText("Choose two different sessions");
+  await expect(comparePanel.locator(".panel-status.error")).toHaveAttribute("role", "alert");
+
+  const search = page.getByPlaceholder("Search sessions");
+  await search.fill("Empty");
+  await expect(page.locator(".session-row")).toHaveCount(1);
+  await page.locator(".session-row").first().click();
+  await expect(page.locator(".timeline-panel .panel-status")).toHaveText("No messages");
+  await expect(page.locator(".timeline-panel .panel-status")).toHaveAttribute("role", "status");
+
+  await search.fill("Alpha");
+  await expect(page.locator(".session-row")).toHaveCount(1);
+  await page.locator(".session-row").first().click();
+  await page.getByRole("button", { name: "Fork session" }).click();
+  await page.locator('[aria-label="Fork session"] .composer-buttons button').last().click();
+  await expect(page.locator('[aria-label="Fork session"] .composer-error')).toHaveText(
+    "Enter the fork message.",
+  );
+  await expect(page.locator('[aria-label="Fork session"] .composer-error')).toHaveAttribute(
+    "role",
+    "alert",
+  );
+});
