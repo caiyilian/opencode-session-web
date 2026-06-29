@@ -12,6 +12,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   compareSessions,
+  createForkSessionStream,
   createNewSessionStream,
   deleteSession,
   getAvailableModels,
@@ -119,8 +120,14 @@ export default function App() {
   const [newSessionModel, setNewSessionModel] = useState("");
   const [newSessionError, setNewSessionError] = useState("");
   const [newSessionDraft, setNewSessionDraft] = useState<StreamDraft | null>(null);
+  const [forkOpen, setForkOpen] = useState(false);
+  const [forkMessage, setForkMessage] = useState("");
+  const [forkModel, setForkModel] = useState("");
+  const [forkError, setForkError] = useState("");
+  const [forkDraft, setForkDraft] = useState<StreamDraft | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const newSessionAbortRef = useRef<AbortController | null>(null);
+  const forkAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -168,6 +175,7 @@ export default function App() {
     return () => {
       eventSourceRef.current?.close();
       newSessionAbortRef.current?.abort();
+      forkAbortRef.current?.abort();
     };
   }, []);
 
@@ -241,6 +249,10 @@ export default function App() {
     setStreamDraft(null);
     setComposerError("");
     setSessionActionState({ status: "idle" });
+    setForkError("");
+    setForkDraft(null);
+    setForkMessage("");
+    setForkOpen(false);
     setComposerModel((currentModel) => {
       if (currentModel && composerModelOptions.includes(currentModel)) return currentModel;
       return composerModelOptions[0] ?? "";
@@ -465,16 +477,39 @@ export default function App() {
     setNewSessionOpen(true);
   }
 
+  function openForkSession() {
+    if (!selectedSession) return;
+    setForkMessage("");
+    setForkModel(composerModel);
+    setForkError("");
+    setForkDraft(null);
+    setForkOpen(true);
+  }
+
   function closeNewSession() {
     if (isStreamActive(newSessionDraft)) return;
     setNewSessionOpen(false);
     setNewSessionError("");
   }
 
+  function closeForkSession() {
+    if (isStreamActive(forkDraft)) return;
+    setForkOpen(false);
+    setForkError("");
+  }
+
   function stopNewSession() {
     newSessionAbortRef.current?.abort();
     newSessionAbortRef.current = null;
     setNewSessionDraft((draft) =>
+      draft ? { ...draft, status: "stopped", statusLabel: "Stopped by user" } : draft,
+    );
+  }
+
+  function stopForkSession() {
+    forkAbortRef.current?.abort();
+    forkAbortRef.current = null;
+    setForkDraft((draft) =>
       draft ? { ...draft, status: "stopped", statusLabel: "Stopped by user" } : draft,
     );
   }
@@ -594,6 +629,136 @@ export default function App() {
       setNewSessionError(errorText(error));
     } finally {
       if (newSessionAbortRef.current === controller) newSessionAbortRef.current = null;
+    }
+  }
+
+  async function submitForkSession() {
+    if (!selectedSession) return;
+
+    const baseSessionId = selectedSession.id;
+    const message = forkMessage.trim();
+    if (!message) {
+      setForkError("Enter the fork message.");
+      return;
+    }
+
+    const controller = new AbortController();
+    forkAbortRef.current = controller;
+    setForkError("");
+    setForkMessage("");
+
+    const now = Date.now();
+    const streamSessionId = `fork-${baseSessionId}-${now}`;
+    setForkDraft({
+      sessionId: streamSessionId,
+      userMessage: {
+        id: `local-fork-user-${now}`,
+        role: "user",
+        parts: [{ type: "text", text: message }],
+        time_created: "Just now",
+        time_created_raw: now,
+        tokens: {},
+      },
+      assistantText: "",
+      thinkingText: "",
+      tools: [],
+      status: "connecting",
+      statusLabel: "Forking",
+    });
+
+    try {
+      const response = await createForkSessionStream(
+        baseSessionId,
+        {
+          message,
+          model: normalizeModelValue(forkModel),
+        },
+        controller.signal,
+      );
+
+      if (!response.ok) {
+        throw new Error(await responseErrorText(response));
+      }
+      if (!response.body) {
+        throw new Error("Streaming response is unavailable.");
+      }
+
+      let forkedSessionId = "";
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() ?? "";
+
+        for (const block of blocks) {
+          const event = parseSseBlock(block);
+          if (!event.type) continue;
+
+          if (event.type === "done") {
+            const donePayload = parseDonePayload(event.data);
+            forkedSessionId = donePayload.session_id || forkedSessionId;
+            setForkDraft((draft) =>
+              draft ? { ...draft, status: "done", statusLabel: "Fork created" } : draft,
+            );
+          } else if (event.type === "stream_error") {
+            setForkDraft((draft) =>
+              draft
+                ? {
+                    ...draft,
+                    status: "error",
+                    statusLabel: "Error",
+                    error: streamErrorText(event.data),
+                  }
+                : draft,
+            );
+            return;
+          } else {
+            applyStreamEvent(setForkDraft, streamSessionId, event.type, event.data);
+          }
+        }
+      }
+
+      if (!forkedSessionId) {
+        const message = "Fork did not return a new session id.";
+        setForkDraft((draft) =>
+          draft
+            ? {
+                ...draft,
+                status: "error",
+                statusLabel: "Error",
+                error: message,
+              }
+            : draft,
+        );
+        setForkError(message);
+        return;
+      }
+
+      if (forkedSessionId) {
+        await refreshDashboard(forkedSessionId);
+        await reloadSessionDetail(forkedSessionId, true);
+        setForkOpen(false);
+      }
+    } catch (error) {
+      if ((error as { name?: string }).name === "AbortError") return;
+      setForkDraft((draft) =>
+        draft
+          ? {
+              ...draft,
+              status: "error",
+              statusLabel: "Error",
+              error: errorText(error),
+            }
+          : draft,
+      );
+      setForkError(errorText(error));
+    } finally {
+      if (forkAbortRef.current === controller) forkAbortRef.current = null;
     }
   }
 
@@ -827,6 +992,7 @@ export default function App() {
                   <SessionActions
                     state={sessionActionState}
                     onDelete={deleteSelectedSession}
+                    onFork={openForkSession}
                     onUndo={undoSelectedSession}
                   />
                 </>
@@ -859,6 +1025,25 @@ export default function App() {
                 <p className="inline-warning">Models unavailable: {data.modelLoadError}</p>
               )}
             </section>
+
+            {forkOpen && selectedSession && (
+              <ForkSessionPanel
+                draft={forkDraft}
+                error={forkError}
+                message={forkMessage}
+                model={forkModel}
+                modelOptions={composerModelOptions}
+                session={selectedSession}
+                onClose={closeForkSession}
+                onMessageChange={(value) => {
+                  setForkMessage(value);
+                  if (forkError) setForkError("");
+                }}
+                onModelChange={setForkModel}
+                onStop={stopForkSession}
+                onSubmit={submitForkSession}
+              />
+            )}
 
             <StatsPanel
               stats={data.stats}
@@ -963,10 +1148,12 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
 function SessionActions({
   state,
   onDelete,
+  onFork,
   onUndo,
 }: {
   state: SessionActionState;
   onDelete: () => void;
+  onFork: () => void;
   onUndo: () => void;
 }) {
   const isBusy = state.status === "loading";
@@ -976,6 +1163,9 @@ function SessionActions({
       <div className="session-action-buttons">
         <button disabled={isBusy} type="button" onClick={onUndo}>
           {state.status === "loading" && state.action === "undo" ? "Undoing" : "Undo last turn"}
+        </button>
+        <button disabled={isBusy} type="button" onClick={onFork}>
+          Fork session
         </button>
         <button className="danger" disabled={isBusy} type="button" onClick={onDelete}>
           {state.status === "loading" && state.action === "delete" ? "Deleting" : "Delete session"}
@@ -1315,6 +1505,92 @@ function SessionComposer({
         </div>
       </div>
     </form>
+  );
+}
+
+function ForkSessionPanel({
+  draft,
+  error,
+  message,
+  model,
+  modelOptions,
+  session,
+  onClose,
+  onMessageChange,
+  onModelChange,
+  onStop,
+  onSubmit,
+}: {
+  draft: StreamDraft | null;
+  error: string;
+  message: string;
+  model: string;
+  modelOptions: string[];
+  session: SessionSummary;
+  onClose: () => void;
+  onMessageChange: (value: string) => void;
+  onModelChange: (value: string) => void;
+  onStop: () => void;
+  onSubmit: () => void;
+}) {
+  const active = isStreamActive(draft);
+
+  return (
+    <section className="detail-panel fork-session-panel" aria-label="Fork session">
+      <div className="panel-heading">
+        <div>
+          <h3>Fork Session</h3>
+          <span>{session.title || "Untitled session"}</span>
+        </div>
+        <button disabled={active} type="button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+      <div className="fork-session-form">
+        <label className="filter-field">
+          <span>Model</span>
+          <select
+            disabled={active}
+            value={model}
+            onChange={(event) => onModelChange(event.target.value)}
+          >
+            <option value="">Default model</option>
+            {modelOptions.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+        <textarea
+          disabled={active}
+          placeholder="First message for the forked session"
+          rows={4}
+          value={message}
+          onChange={(event) => onMessageChange(event.target.value)}
+        />
+        <div className="composer-actions">
+          {error && <span className="composer-error">{error}</span>}
+          {draft?.error && <span className="composer-error">{draft.error}</span>}
+          <div className="composer-buttons">
+            {active && (
+              <button className="secondary-button" type="button" onClick={onStop}>
+                Stop
+              </button>
+            )}
+            <button disabled={active} type="button" onClick={onSubmit}>
+              Fork
+            </button>
+          </div>
+        </div>
+      </div>
+      {draft && (
+        <div className="fork-session-preview">
+          <MessageCard index={0} message={draft.userMessage} />
+          <StreamingMessageCard draft={draft} />
+        </div>
+      )}
+    </section>
   );
 }
 

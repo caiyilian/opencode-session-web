@@ -474,7 +474,12 @@ select {
   background: #ffffff;
 }
 
-.new-session-panel .panel-heading button {
+.fork-session-panel {
+  grid-column: 1 / -1;
+}
+
+.new-session-panel .panel-heading button,
+.fork-session-panel .panel-heading button {
   height: 30px;
   border: 1px solid #cfd6e2;
   border-radius: 6px;
@@ -484,12 +489,14 @@ select {
   cursor: pointer;
 }
 
-.new-session-panel .panel-heading button:disabled {
+.new-session-panel .panel-heading button:disabled,
+.fork-session-panel .panel-heading button:disabled {
   color: #8a94a6;
   cursor: default;
 }
 
-.new-session-form {
+.new-session-form,
+.fork-session-form {
   display: grid;
   gap: 10px;
   padding: 14px;
@@ -497,7 +504,9 @@ select {
 
 .new-session-form select,
 .new-session-form input,
-.new-session-form textarea {
+.new-session-form textarea,
+.fork-session-form select,
+.fork-session-form textarea {
   width: 100%;
   border: 1px solid #cfd6e2;
   border-radius: 6px;
@@ -507,12 +516,14 @@ select {
 }
 
 .new-session-form select,
-.new-session-form input {
+.new-session-form input,
+.fork-session-form select {
   height: 36px;
   padding: 0 10px;
 }
 
-.new-session-form textarea {
+.new-session-form textarea,
+.fork-session-form textarea {
   min-height: 92px;
   resize: vertical;
   padding: 10px 11px;
@@ -521,11 +532,14 @@ select {
 
 .new-session-form select:focus,
 .new-session-form input:focus,
-.new-session-form textarea:focus {
+.new-session-form textarea:focus,
+.fork-session-form select:focus,
+.fork-session-form textarea:focus {
   border-color: #2864c8;
 }
 
-.new-session-preview {
+.new-session-preview,
+.fork-session-preview {
   display: grid;
   gap: 12px;
   border-top: 1px solid #e3e8f0;

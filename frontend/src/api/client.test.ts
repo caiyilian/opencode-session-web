@@ -3,6 +3,7 @@ import {
   ApiError,
   apiRequest,
   compareSessions,
+  createForkSessionStream,
   createNewSessionStream,
   deleteSession,
   getSession,
@@ -127,6 +128,30 @@ describe("api client", () => {
         body: JSON.stringify({
           directory: "C:/repo/app",
           message: "start here",
+          model: "provider/model",
+        }),
+        headers: expect.objectContaining({
+          Accept: "text/event-stream",
+          "Content-Type": "application/json",
+        }),
+      }),
+    );
+  });
+
+  it("posts fork session stream requests to encoded session paths", async () => {
+    mockJsonResponse({ ok: true });
+
+    await createForkSessionStream("ses/with space", {
+      message: "continue from here",
+      model: "provider/model",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/sessions/ses%2Fwith%20space/fork",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          message: "continue from here",
           model: "provider/model",
         }),
         headers: expect.objectContaining({
