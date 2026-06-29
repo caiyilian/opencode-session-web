@@ -13,8 +13,10 @@ import threading
 import time
 from pathlib import Path
 from flask import Flask, jsonify, request, render_template, Response, stream_with_context
+from logging_config import configure_logging
 
 app = Flask(__name__)
+logger = configure_logging()
 
 # ── 数据库路径 ──────────────────────────────────────────────
 
@@ -707,8 +709,7 @@ def run_opencode_stream(cmd, session_id, timeout=600):
     - stderr 中的内容 → 如果没有 stdout 输出则作为 error 事件发送
     - 进程异常退出时发送 stderr 内容
     """
-    import sys
-    print(f"[DEBUG] run_opencode_stream called, cmd={cmd}", file=sys.stderr, flush=True)
+    logger.debug("run_opencode_stream called cmd=%s", cmd)
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -718,7 +719,7 @@ def run_opencode_stream(cmd, session_id, timeout=600):
         errors="replace",
         stdin=subprocess.DEVNULL,
     )
-    print(f"[DEBUG] proc started, pid={proc.pid}", file=sys.stderr, flush=True)
+    logger.debug("opencode process started pid=%s", proc.pid)
 
     # 收集 stderr 的线程（stderr 无缓冲，Node 的 console.error 立即到达）
     stderr_lines = []
@@ -757,11 +758,18 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                 with stderr_lock:
                     recent_stderr = list(stderr_lines[-10:])
                     stderr_count = len(stderr_lines)
-                print(f"[DEBUG] 5s timeout #{loop_count}: has_json={has_json_output} total_stderr={stderr_count} elapsed={elapsed}s proc_alive={proc.poll() is None}", file=sys.stderr, flush=True)
+                logger.debug(
+                    "stream timeout check loop=%s has_json=%s stderr_count=%s elapsed=%ss proc_alive=%s",
+                    loop_count,
+                    has_json_output,
+                    stderr_count,
+                    elapsed,
+                    proc.poll() is None,
+                )
                 if recent_stderr:
                     combined = "\n".join(recent_stderr).lower()
                     is_rate_limit = any(kw in combined for kw in RATE_LIMIT_KEYWORDS)
-                    print(f"[DEBUG] stderr content: {recent_stderr[-1][:200]}", file=sys.stderr, flush=True)
+                    logger.debug("recent stderr: %s", recent_stderr[-1][:200])
                     if is_rate_limit:
                         try: proc.kill()
                         except: pass
@@ -779,7 +787,7 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                     try: proc.kill()
                     except: pass
                     err_msg = "模型无响应（可能已达到使用限制），请切换模型后重试"
-                    print(f"[DEBUG] killing proc after {elapsed}s of silence", file=sys.stderr, flush=True)
+                    logger.warning("killing opencode process after %ss of silence", elapsed)
                     yield f"event: stream_error\ndata: {err_msg}\n\n"
                     return
                 # 发送状态事件，防止前端 30 秒超时
@@ -831,8 +839,7 @@ def run_opencode_stream(cmd, session_id, timeout=600):
 
                 err_text = extract_error(event)
                 if err_text:
-                    import sys
-                    print(f"[DEBUG] error detected: {err_text[:200]}", file=sys.stderr, flush=True)
+                    logger.warning("opencode stream error detected: %s", err_text[:200])
                     try: proc.kill()
                     except: pass
                     yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
@@ -874,13 +881,11 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                         if err_msg:
                             yield f"event: stream_error\ndata: {safe_truncate(err_msg)}\n\n"
                     else:
-                        import sys
-                        print(f"[DEBUG] unknown event_type={event_type} data={line[:200]}", file=sys.stderr, flush=True)
+                        logger.debug("unknown opencode event_type=%s data=%s", event_type, line[:200])
             except json.JSONDecodeError:
                 # 非 JSON 行 — 可能是错误信息（限流、模型不可用等）
                 non_json = line.strip()
-                import sys
-                print(f"[DEBUG] non-JSON stdout: {non_json[:200]}", file=sys.stderr, flush=True)
+                logger.debug("non-json opencode stdout: %s", non_json[:200])
                 if non_json and len(non_json) > 5:
                     lower_line = non_json.lower()
                     if any(kw in lower_line for kw in RATE_LIMIT_KEYWORDS):
@@ -1120,8 +1125,7 @@ def api_session_new():
 
                     err_text = extract_error_new(ev)
                     if err_text:
-                        import sys
-                        print(f"[DEBUG] new-session error detected: {err_text[:200]}", file=sys.stderr, flush=True)
+                        logger.warning("new-session stream error detected: %s", err_text[:200])
                         try: proc.kill()
                         except: pass
                         had_error = True
@@ -1151,12 +1155,10 @@ def api_session_new():
                         tokens = part.get("tokens", {})
                         yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
                     elif ev_type and ev_type not in ("step_start", "step_finish"):
-                        import sys
-                        print(f"[DEBUG] new-session unknown event_type={ev_type} data={line[:200]}", file=sys.stderr, flush=True)
+                        logger.debug("new-session unknown event_type=%s data=%s", ev_type, line[:200])
                 except json.JSONDecodeError:
                     non_json = line.strip()
-                    import sys
-                    print(f"[DEBUG] new-session non-JSON stdout: {non_json[:200]}", file=sys.stderr, flush=True)
+                    logger.debug("new-session non-json stdout: %s", non_json[:200])
                     if non_json and len(non_json) > 5:
                         lower_line = non_json.lower()
                         if any(kw in lower_line for kw in RATE_LIMIT_KW):
@@ -1539,14 +1541,12 @@ if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
 
     if not os.path.isfile(DB_PATH):
-        print(f"[错误] 数据库不存在: {DB_PATH}")
-        print("请确认 OpenCode 已运行并有会话记录。")
+        logger.error("database not found: %s", DB_PATH)
+        logger.error("please run OpenCode first and ensure session records exist")
         sys.exit(1)
 
-    print(f"  OpenCode 会话查看器")
-    print(f"  {'=' * 40}")
-    print(f"  数据库: {DB_PATH}")
-    print(f"  地址:   http://127.0.0.1:{port}")
-    print(f"  {'=' * 40}")
+    logger.info("OpenCode session viewer starting")
+    logger.info("database: %s", DB_PATH)
+    logger.info("url: http://127.0.0.1:%s", port)
 
     app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
