@@ -595,18 +595,9 @@ async function sendMessage() {
     const msgEl = document.getElementById(streamId);
     if (loading) loading.remove();
     if (msgEl) msgEl.classList.remove('streaming');
-    // 显示后端发送的错误信息
-    let errorMsg = e.data || '未知错误';
-    // 尝试解析 JSON 格式的错误
-    try {
-      const parsed = JSON.parse(errorMsg);
-      if (parsed.message) errorMsg = parsed.message;
-      else if (parsed.error) errorMsg = parsed.error;
-      else if (parsed.name) errorMsg = parsed.name + (parsed.data?.message ? ': ' + parsed.data.message : '');
-    } catch (_) {}
     const textEl = document.getElementById(streamId + '_text');
     if (textEl) {
-      textEl.innerHTML = `<div class="error-msg">${escHtml(errorMsg)}</div>`;
+      textEl.innerHTML = renderStreamError(e.data);
     }
     generationDone();
   });
@@ -623,7 +614,7 @@ async function sendMessage() {
       const msgEl = document.getElementById(streamId);
       if (loadingEl) loadingEl.remove();
       if (msgEl) msgEl.classList.remove('streaming');
-      textEl.innerHTML = '<div class="error-msg">连接中断，模型可能受限。请切换模型后重试。</div>';
+      textEl.innerHTML = renderStreamError('连接中断，模型可能受限。请切换模型后重试。');
       generationDone();
     }
   };
@@ -688,6 +679,62 @@ function escHtml(s) {
   d.textContent = s;
   return d.innerHTML;
 }
+
+function parseStreamError(raw) {
+  let message = (raw || '未知错误').trim();
+  try {
+    const parsed = JSON.parse(message);
+    if (parsed.message) message = streamErrorTextFromValue(parsed.message);
+    else if (parsed.error) message = streamErrorTextFromValue(parsed.error);
+    else if (parsed.name) message = parsed.name + (parsed.data?.message ? ': ' + parsed.data.message : '');
+  } catch (_) {}
+  message = streamErrorTextFromValue(message) || '未知错误';
+
+  const detailMarker = '\n\n技术细节：';
+  const markerIndex = message.indexOf(detailMarker);
+  if (markerIndex >= 0) {
+    return {
+      summary: message.slice(0, markerIndex).trim() || 'OpenCode 返回错误',
+      details: message.slice(markerIndex + detailMarker.length).trim(),
+    };
+  }
+
+  const inlineMarker = '技术细节：';
+  const inlineIndex = message.indexOf(inlineMarker);
+  if (inlineIndex > 0) {
+    return {
+      summary: message.slice(0, inlineIndex).trim() || 'OpenCode 返回错误',
+      details: message.slice(inlineIndex + inlineMarker.length).trim(),
+    };
+  }
+
+  return { summary: message, details: '' };
+}
+
+function streamErrorTextFromValue(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') {
+    if (value.message) return streamErrorTextFromValue(value.message);
+    if (value.error) return streamErrorTextFromValue(value.error);
+    if (value.name) return streamErrorTextFromValue(value.name);
+    try {
+      return JSON.stringify(value);
+    } catch (_) {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function renderStreamError(raw) {
+  const parsed = parseStreamError(raw);
+  const detailHtml = parsed.details
+    ? `<details class="error-details"><summary>技术细节</summary><pre>${escHtml(parsed.details)}</pre></details>`
+    : '';
+  return `<div class="error-msg"><div class="error-title">${escHtml(parsed.summary)}</div>${detailHtml}</div>`;
+}
+window.renderStreamError = renderStreamError;
 
 function fmtTokens(n) {
   if (!n) return '0';
@@ -882,7 +929,7 @@ function startNewSession() {
           const msgEl = document.getElementById(streamId);
           if (loading) loading.remove();
           if (msgEl) msgEl.classList.remove('streaming');
-          messagesArea.innerHTML += `<div class="empty-state"><p style="color:var(--accent3)">错误: ${escHtml(data)}</p></div>`;
+          messagesArea.innerHTML += `<div class="empty-state">${renderStreamError(data)}</div>`;
           submitBtn.disabled = false;
         }
       }
@@ -890,7 +937,7 @@ function startNewSession() {
   }).catch((err) => {
     const loading = document.getElementById(streamId + '_loading');
     if (loading) loading.remove();
-    messagesArea.innerHTML += `<div class="empty-state"><p style="color:var(--accent3)">错误: ${escHtml(err.message)}</p></div>`;
+    messagesArea.innerHTML += `<div class="empty-state">${renderStreamError(err.message)}</div>`;
     submitBtn.disabled = false;
   });
 }
@@ -1269,7 +1316,7 @@ async function forkSession() {
   } catch (e) {
     const loading = document.getElementById(streamId + '_loading');
     if (loading) loading.remove();
-    messagesArea.innerHTML += `<div class="empty-state"><p style="color:var(--accent3)">错误: ${escHtml(e.message)}</p></div>`;
+    messagesArea.innerHTML += `<div class="empty-state">${renderStreamError(e.message)}</div>`;
   } finally {
     submitBtn.disabled = false;
   }

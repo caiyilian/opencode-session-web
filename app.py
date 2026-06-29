@@ -1187,7 +1187,13 @@ def api_session_undo(session_id):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    static_dir = os.path.join(app.root_path, "static")
+    asset_paths = [
+        os.path.join(static_dir, "css", "main.css"),
+        os.path.join(static_dir, "js", "app.js"),
+    ]
+    asset_version = int(max(os.path.getmtime(path) for path in asset_paths if os.path.exists(path)))
+    return render_template("index.html", asset_version=asset_version)
 
 
 # ── 启动 ──────────────────────────────────────────────
