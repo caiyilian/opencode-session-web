@@ -31,6 +31,7 @@ from services.opencode_errors import format_stream_error_message, is_known_error
 from services.opencode_events import parse_part
 from services.opencode_runner import event_to_sse
 from services.process_manager import ProcessManager
+from services.sync_watcher import diff_session_snapshots, fetch_session_snapshots
 
 app = Flask(__name__)
 logger = configure_logging()
@@ -956,6 +957,62 @@ def api_files():
         return jsonify({"error": "无权限访问该目录"}), 403
     except OSError as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── Phase 2.1: 实时同步事件 ──────────────────────────────
+
+
+@app.route("/api/events")
+def api_events():
+    """Broadcast lightweight database changes over SSE."""
+    interval_ms = _bounded_int_arg("interval_ms", 1000, minimum=0, maximum=30000)
+    max_polls_arg = request.args.get("max_polls")
+    max_polls = None
+    if max_polls_arg is not None:
+        max_polls = _bounded_int_arg("max_polls", 1, minimum=1, maximum=1000)
+
+    def generate():
+        conn = get_db()
+        try:
+            previous = fetch_session_snapshots(conn)
+        finally:
+            conn.close()
+
+        poll_count = 0
+        while max_polls is None or poll_count < max_polls:
+            conn = get_db()
+            try:
+                current = fetch_session_snapshots(conn)
+            finally:
+                conn.close()
+
+            changes = diff_session_snapshots(previous, current)
+            if changes:
+                for change in changes:
+                    yield sse.json_event("session_change", change.to_dict())
+                previous = current
+            else:
+                yield sse.json_event("heartbeat", {"sessions": len(current)})
+
+            poll_count += 1
+            if max_polls is not None and poll_count >= max_polls:
+                break
+            if interval_ms > 0:
+                time.sleep(interval_ms / 1000)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Connection": "keep-alive", "Cache-Control": "no-cache"},
+    )
+
+
+def _bounded_int_arg(name, default, *, minimum, maximum):
+    try:
+        value = int(request.args.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
 
 
 # ── Phase 3: 统计图表数据 ──────────────────────────────
