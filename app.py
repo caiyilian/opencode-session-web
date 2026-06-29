@@ -837,6 +837,9 @@ def api_session_new():
     def generate():
         new_session_id = None
         had_error = False
+        proc = None
+        stderr_thread2 = None
+        stdout_thread2 = None
         try:
             cmd = [
                 "opencode", "run",
@@ -848,11 +851,15 @@ def api_session_new():
                 cmd.insert(2, "-m")
                 cmd.insert(3, model)
 
-            proc = subprocess.Popen(
+            proc = process_manager.start(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace",
                 stdin=subprocess.DEVNULL,
             )
+
+            def terminate_new_session_process():
+                if proc:
+                    process_manager.terminate(proc, timeout=2)
 
             # stderr 收集线程
             stderr_lines = []
@@ -890,8 +897,7 @@ def api_session_new():
                         combined = "\n".join(recent_stderr).lower()
                         is_rate_limit = any(kw in combined for kw in RATE_LIMIT_KW)
                         if is_rate_limit or not has_output:
-                            try: proc.kill()
-                            except: pass
+                            terminate_new_session_process()
                             err_text = "\n".join(recent_stderr[-5:])
                             had_error = True
                             yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
@@ -899,8 +905,7 @@ def api_session_new():
                     # 无任何输出超过 25 秒，终止
                     elapsed = int(time.time() - last_output_time)
                     if elapsed > 25:
-                        try: proc.kill()
-                        except: pass
+                        terminate_new_session_process()
                         had_error = True
                         yield f"event: stream_error\ndata: 模型无响应（可能已达到使用限制），请切换模型后重试\n\n"
                         return
@@ -954,8 +959,7 @@ def api_session_new():
                     err_text = extract_error_new(ev)
                     if err_text:
                         logger.warning("new-session stream error detected: %s", err_text[:200])
-                        try: proc.kill()
-                        except: pass
+                        terminate_new_session_process()
                         had_error = True
                         yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
                         return
@@ -990,8 +994,7 @@ def api_session_new():
                     if non_json and len(non_json) > 5:
                         lower_line = non_json.lower()
                         if any(kw in lower_line for kw in RATE_LIMIT_KW):
-                            try: proc.kill()
-                            except: pass
+                            terminate_new_session_process()
                             had_error = True
                             yield f"event: stream_error\ndata: {safe_truncate(non_json)}\n\n"
                             return
@@ -1014,12 +1017,18 @@ def api_session_new():
         except subprocess.TimeoutExpired:
             had_error = True
             if proc:
-                proc.kill()
+                process_manager.terminate(proc, timeout=2)
             yield "event: stream_error\ndata: 请求超时\n\n"
         except Exception as e:
             had_error = True
             yield f"event: stream_error\ndata: {str(e)}\n\n"
         finally:
+            if proc:
+                process_manager.unregister(proc)
+            if stdout_thread2:
+                stdout_thread2.join(timeout=2)
+            if stderr_thread2:
+                stderr_thread2.join(timeout=2)
             if not had_error:
                 yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or ''})}\n\n"
 
