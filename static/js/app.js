@@ -8,6 +8,8 @@ let allSessions = [];
 let allModels = [];       // 可用模型列表
 let currentModel = '';    // 当前选中模型
 let eventSource = null;
+let syncEventSource = null;
+let syncRefreshTimer = null;
 let currentDirectory = '';  // 当前会话的工作目录
 let compareMode = false;    // 对比模式
 let compareIds = [];        // 选中的对比会话 ID 列表
@@ -17,6 +19,69 @@ const SESSION_CACHE = {};   // 会话详情缓存 { sessionId: data }
 async function api(path) {
   const res = await fetch(path);
   return res.json();
+}
+
+async function refreshSessionList({ render = true } = {}) {
+  const [dirsData, sessData] = await Promise.all([
+    api('/api/directories'),
+    api('/api/sessions?limit=200'),
+  ]);
+  allDirectories = dirsData.directories || [];
+  allSessions = sessData.sessions || [];
+  sessions = allSessions;
+
+  const availableIds = new Set(allSessions.map(s => s.id));
+  compareIds = compareIds.filter(id => availableIds.has(id));
+
+  if (render) renderSidebar();
+}
+
+function invalidateSessionCache(change) {
+  const ids = [
+    change && change.session && change.session.id,
+    change && change.previous && change.previous.id,
+  ].filter(Boolean);
+  for (const id of ids) {
+    delete SESSION_CACHE[id];
+  }
+}
+
+function scheduleSessionListRefresh(change) {
+  invalidateSessionCache(change);
+  if (syncRefreshTimer) clearTimeout(syncRefreshTimer);
+  syncRefreshTimer = setTimeout(async () => {
+    syncRefreshTimer = null;
+    try {
+      await refreshSessionList();
+      if (currentSessionId && !allSessions.some(s => s.id === currentSessionId)) {
+        showList();
+      }
+    } catch (_) {
+      // The EventSource connection will keep running; the next change can retry.
+    }
+  }, 300);
+}
+
+function handleSessionChangeEvent(e) {
+  try {
+    scheduleSessionListRefresh(JSON.parse(e.data || '{}'));
+  } catch (_) {
+    scheduleSessionListRefresh({});
+  }
+}
+
+function connectSessionEvents() {
+  if (syncEventSource || typeof EventSource === 'undefined') return;
+
+  syncEventSource = new EventSource('/api/events');
+  syncEventSource.addEventListener('session_change', handleSessionChangeEvent);
+  syncEventSource.onerror = () => {
+    if (syncEventSource && syncEventSource.readyState === EventSource.CLOSED) {
+      syncEventSource.close();
+      syncEventSource = null;
+      setTimeout(connectSessionEvents, 3000);
+    }
+  };
 }
 
 // ── Markdown rendering ──
@@ -199,6 +264,7 @@ async function init() {
 
   // 先渲染侧栏，让用户尽快看到内容
   renderSidebar();
+  connectSessionEvents();
 
   // 延后加载可用模型（调用 opencode models 子进程较慢）
   try {
@@ -653,12 +719,8 @@ async function deleteSession(id) {
     const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
     const data = await res.json();
     if (data.error) { alert(data.error); return; }
-    // 刷新侧栏
-    const sessData = await api('/api/sessions?limit=200');
-    allSessions = sessData.sessions;
-    sessions = allSessions;
+    await refreshSessionList({ render: currentSessionId !== id });
     if (currentSessionId === id) showList();
-    else renderSidebar();
   } catch (e) {
     alert('删除失败: ' + e.message);
   }
@@ -913,11 +975,7 @@ function startNewSession() {
 
           if (newId) {
             currentSessionId = newId;
-            // Refresh session list and switch to new session
-            const sessData = await api('/api/sessions?limit=200');
-            allSessions = sessData.sessions;
-            sessions = allSessions;
-            renderSidebar();
+            await refreshSessionList();
             // Load the full session
             openSession(newId);
           } else {
@@ -1304,10 +1362,7 @@ async function forkSession() {
     if (newId) {
       // Refresh and navigate to new session
       currentSessionId = newId;
-      const sessData = await api('/api/sessions?limit=200');
-      allSessions = sessData.sessions;
-      sessions = allSessions;
-      renderSidebar();
+      await refreshSessionList();
       openSession(newId);
     } else {
       inputArea.classList.add('show');
