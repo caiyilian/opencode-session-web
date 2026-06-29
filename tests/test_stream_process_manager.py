@@ -281,6 +281,7 @@ def test_fork_session_stream_terminates_process_manager_on_non_json_rate_limit(m
     body = response.get_data(as_text=True)
     assert response.status_code == 200
     assert "event: stream_error" in body
+    assert "模型额度或速率已受限" in body
     assert "quota exceeded" in body
     assert manager.terminated == [(process, 2)]
     assert manager.unregistered == [process]
