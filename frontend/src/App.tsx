@@ -1175,50 +1175,28 @@ function MessagePartView({ part, index }: { part: MessagePart; index: number }) 
   }
 
   if (part.type === "tool") {
-    const description = stringValue(part.description);
-    const input = stringValue(part.input);
-    const output = stringValue(part.output);
-    const isHidden = Boolean(part.is_hidden);
-
     return (
-      <div className="part-block tool-part">
-        <div className="part-heading">
-          <strong>{stringValue(part.tool) || "tool"}</strong>
-          {isHidden && <span className="state-pill muted">Hidden output</span>}
-        </div>
-        {description && <div className="part-text compact">{description}</div>}
-        {input && (
-          <pre className="part-code">
-            <code>{input}</code>
-          </pre>
-        )}
-        {!isHidden && output && (
-          <pre className="part-code">
-            <code>{output}</code>
-          </pre>
-        )}
-      </div>
+      <ToolCard
+        description={stringValue(part.description)}
+        hidden={Boolean(part.is_hidden)}
+        input={stringValue(part.input)}
+        output={stringValue(part.output)}
+        status={part.is_hidden ? "Hidden output" : "Tool call"}
+        tool={stringValue(part.tool)}
+        variant="call"
+      />
     );
   }
 
   if (part.type === "tool_result") {
-    const content = stringifyValue(part.content);
-    const isHidden = Boolean(part.is_hidden);
-    const status = stringValue(part.status);
-
     return (
-      <div className="part-block tool-part">
-        <div className="part-heading">
-          <strong>{stringValue(part.tool_name) || "tool result"}</strong>
-          {status && <span className="state-pill">{status}</span>}
-          {isHidden && <span className="state-pill muted">Hidden output</span>}
-        </div>
-        {!isHidden && content && (
-          <pre className="part-code">
-            <code>{content}</code>
-          </pre>
-        )}
-      </div>
+      <ToolCard
+        hidden={Boolean(part.is_hidden)}
+        output={stringifyValue(part.content)}
+        status={stringValue(part.status) || (part.is_hidden ? "Hidden output" : "Result")}
+        tool={stringValue(part.tool_name)}
+        variant="result"
+      />
     );
   }
 
@@ -1244,6 +1222,66 @@ function MessagePartView({ part, index }: { part: MessagePart; index: number }) 
         {stringifyValue(part)}
       </code>
     </pre>
+  );
+}
+
+function ToolCard({
+  description = "",
+  hidden,
+  input = "",
+  output = "",
+  status,
+  tool,
+  variant,
+}: {
+  description?: string;
+  hidden: boolean;
+  input?: string;
+  output?: string;
+  status: string;
+  tool: string;
+  variant: "call" | "result";
+}) {
+  const name = tool || (variant === "call" ? "tool" : "tool result");
+  const kind = toolKind(name);
+  const hasBody = Boolean(description || input || output || hidden);
+
+  return (
+    <details className={`tool-card ${kind.className}`} open={variant === "call"}>
+      <summary>
+        <span className="tool-card-title">
+          <strong>{name}</strong>
+          <span>{kind.label}</span>
+        </span>
+        <span className={`state-pill ${hidden ? "muted" : ""}`}>{status}</span>
+      </summary>
+      {hasBody ? (
+        <div className="tool-card-body">
+          {description && <div className="tool-description">{description}</div>}
+          {input && <ToolSection label="Input" value={input} />}
+          {hidden ? (
+            <div className="tool-hidden-output">Output is hidden or truncated.</div>
+          ) : (
+            output && (
+              <ToolSection label={variant === "call" ? "Output" : "Result"} value={output} />
+            )
+          )}
+        </div>
+      ) : (
+        <div className="tool-card-body muted">No tool details.</div>
+      )}
+    </details>
+  );
+}
+
+function ToolSection({ label, value }: { label: string; value: string }) {
+  return (
+    <section className="tool-section">
+      <div>{label}</div>
+      <pre className="part-code">
+        <code>{value}</code>
+      </pre>
+    </section>
   );
 }
 
@@ -1303,6 +1341,16 @@ function deriveComposerModelOptions(modelOptions: string[], currentModel: string
   const options = new Set(modelOptions.map(normalizeModelValue).filter(Boolean));
   if (normalizedCurrent) options.add(normalizedCurrent);
   return Array.from(options).sort((a, b) => a.localeCompare(b));
+}
+
+function toolKind(tool: string) {
+  const normalized = tool.toLowerCase();
+  if (normalized.includes("bash")) return { className: "tool-bash", label: "Command" };
+  if (normalized.includes("read")) return { className: "tool-read", label: "Read" };
+  if (normalized.includes("write")) return { className: "tool-write", label: "Write" };
+  if (normalized.includes("edit")) return { className: "tool-edit", label: "Edit" };
+  if (normalized.includes("glob")) return { className: "tool-glob", label: "Search" };
+  return { className: "tool-generic", label: "Tool" };
 }
 
 function applyStreamEvent(
