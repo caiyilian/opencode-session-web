@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   getAvailableModels,
   getDirectories,
   getSession,
+  getSessionStreamUrl,
   getSessions,
   getStats,
   type DirectorySummary,
@@ -54,16 +55,34 @@ type DetailState =
   | { status: "ready"; sessionId: string; data: SessionDetailResponse }
   | { status: "error"; sessionId: string; message: string };
 
+type StreamStatus = "connecting" | "streaming" | "done" | "error" | "stopped";
+
 interface SessionFilters {
   query: string;
   directory: string;
   model: string;
 }
 
+interface StreamDraft {
+  sessionId: string;
+  userMessage: SessionMessage;
+  assistantText: string;
+  thinkingText: string;
+  tools: string[];
+  status: StreamStatus;
+  statusLabel: string;
+  error?: string;
+}
+
 export default function App() {
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
   const [detailState, setDetailState] = useState<DetailState>({ status: "idle" });
   const [browseState, dispatch] = useReducer(browseReducer, undefined, createInitialBrowseState);
+  const [composerText, setComposerText] = useState("");
+  const [composerModel, setComposerModel] = useState("");
+  const [composerError, setComposerError] = useState("");
+  const [streamDraft, setStreamDraft] = useState<StreamDraft | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -107,6 +126,12 @@ export default function App() {
     writeHiddenProviders(browseState.hiddenProviders);
   }, [browseState.hiddenProviders]);
 
+  useEffect(() => {
+    return () => {
+      eventSourceRef.current?.close();
+    };
+  }, []);
+
   const data = loadState.status === "ready" ? loadState.data : null;
   const filters = useMemo<SessionFilters>(
     () => ({
@@ -140,10 +165,17 @@ export default function App() {
     filteredSessions.find((session) => session.id === browseState.selectedSessionId) ??
     filteredSessions[0] ??
     null;
+  const composerModelOptions = useMemo(
+    () => deriveComposerModelOptions(visibleModelOptions, selectedSession?.model ?? ""),
+    [selectedSession?.model, visibleModelOptions],
+  );
 
   useEffect(() => {
     if (!selectedSession) {
       setDetailState({ status: "idle" });
+      setStreamDraft(null);
+      eventSourceRef.current?.close();
+      eventSourceRef.current = null;
       return;
     }
 
@@ -164,9 +196,159 @@ export default function App() {
     };
   }, [selectedSession?.id]);
 
+  useEffect(() => {
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+    setStreamDraft(null);
+    setComposerError("");
+    setComposerModel((currentModel) => {
+      if (currentModel && composerModelOptions.includes(currentModel)) return currentModel;
+      return composerModelOptions[0] ?? "";
+    });
+  }, [composerModelOptions, selectedSession?.id]);
+
   const activeFilterCount = [filters.query.trim(), filters.directory, filters.model].filter(
     Boolean,
   ).length;
+
+  function reloadSessionDetail(sessionId: string, clearDraft = false) {
+    return getSession(sessionId)
+      .then((detail) => {
+        setDetailState({ status: "ready", sessionId, data: detail });
+        if (clearDraft) setStreamDraft(null);
+      })
+      .catch((error: unknown) => {
+        setDetailState({ status: "error", sessionId, message: errorText(error) });
+      });
+  }
+
+  function stopStream() {
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+    setStreamDraft((draft) =>
+      draft ? { ...draft, status: "stopped", statusLabel: "Stopped by user" } : draft,
+    );
+  }
+
+  function submitComposer() {
+    if (!selectedSession) return;
+
+    const message = composerText.trim();
+    if (!message) {
+      setComposerError("Enter a message before sending.");
+      return;
+    }
+
+    eventSourceRef.current?.close();
+    setComposerError("");
+    setComposerText("");
+
+    const sessionId = selectedSession.id;
+    const now = Date.now();
+    const draft: StreamDraft = {
+      sessionId,
+      userMessage: {
+        id: `local-user-${now}`,
+        role: "user",
+        parts: [{ type: "text", text: message }],
+        time_created: "Just now",
+        time_created_raw: now,
+        tokens: {},
+      },
+      assistantText: "",
+      thinkingText: "",
+      tools: [],
+      status: "connecting",
+      statusLabel: "Connecting",
+    };
+    setStreamDraft(draft);
+
+    const source = new EventSource(
+      getSessionStreamUrl(sessionId, {
+        message,
+        model: normalizeModelValue(composerModel),
+      }),
+    );
+    eventSourceRef.current = source;
+
+    const appendDraft = (update: (draft: StreamDraft) => StreamDraft) => {
+      setStreamDraft((current) => {
+        if (!current || current.sessionId !== sessionId) return current;
+        return update(current);
+      });
+    };
+    const closeSource = () => {
+      source.close();
+      if (eventSourceRef.current === source) eventSourceRef.current = null;
+    };
+
+    source.addEventListener("thinking", (event) => {
+      appendDraft((current) => ({
+        ...current,
+        status: "streaming",
+        statusLabel: "Thinking",
+        thinkingText: appendStreamText(current.thinkingText, event.data),
+      }));
+    });
+
+    source.addEventListener("text", (event) => {
+      appendDraft((current) => ({
+        ...current,
+        status: "streaming",
+        statusLabel: "Streaming",
+        assistantText: appendStreamText(current.assistantText, event.data),
+      }));
+    });
+
+    source.addEventListener("tool_use", (event) => {
+      appendDraft((current) => ({
+        ...current,
+        status: "streaming",
+        statusLabel: "Using tool",
+        tools: [...current.tools, toolLabel(event.data)],
+      }));
+    });
+
+    source.addEventListener("tool_result", () => {
+      appendDraft((current) => ({
+        ...current,
+        status: "streaming",
+        statusLabel: "Processing tool result",
+      }));
+    });
+
+    source.addEventListener("status", (event) => {
+      const label = event.data === "waiting" ? "Waiting for model" : "Thinking";
+      appendDraft((current) => ({ ...current, statusLabel: label }));
+    });
+
+    source.addEventListener("done", () => {
+      closeSource();
+      appendDraft((current) => ({ ...current, status: "done", statusLabel: "Done" }));
+      void reloadSessionDetail(sessionId, true);
+    });
+
+    source.addEventListener("stream_error", (event) => {
+      closeSource();
+      appendDraft((current) => ({
+        ...current,
+        status: "error",
+        statusLabel: "Error",
+        error: streamErrorText(event.data),
+      }));
+    });
+
+    source.onerror = () => {
+      if (eventSourceRef.current !== source) return;
+      closeSource();
+      appendDraft((current) => ({
+        ...current,
+        status: "error",
+        statusLabel: "Connection interrupted",
+        error: "Connection interrupted. Stop and try another model if the model is unavailable.",
+      }));
+    };
+  }
 
   return (
     <main className={`app-shell ${browseState.sidebarOpen ? "" : "sidebar-collapsed"}`}>
@@ -407,7 +589,23 @@ export default function App() {
                       : "No session"}
                 </span>
               </div>
-              <MessageTimeline state={detailState} />
+              <MessageTimeline state={detailState} streamDraft={streamDraft} />
+              <SessionComposer
+                disabled={!selectedSession}
+                error={composerError}
+                model={composerModel}
+                modelOptions={composerModelOptions}
+                selectedSession={selectedSession}
+                streamDraft={streamDraft}
+                text={composerText}
+                onModelChange={setComposerModel}
+                onStop={stopStream}
+                onSubmit={submitComposer}
+                onTextChange={(value) => {
+                  setComposerText(value);
+                  if (composerError) setComposerError("");
+                }}
+              />
             </section>
           </div>
         )}
@@ -473,18 +671,149 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
   );
 }
 
-function MessageTimeline({ state }: { state: DetailState }) {
+function MessageTimeline({ state, streamDraft }: { state: DetailState; streamDraft?: StreamDraft | null }) {
   if (state.status === "idle") return <PanelStatus label="No session selected" />;
   if (state.status === "loading") return <PanelStatus label="Loading messages" />;
   if (state.status === "error") return <PanelStatus label={state.message} tone="error" />;
-  if (state.data.messages.length === 0) return <PanelStatus label="No messages" />;
+  if (state.data.messages.length === 0 && !streamDraft) return <PanelStatus label="No messages" />;
 
   return (
     <div className="message-timeline">
       {state.data.messages.map((message, index) => (
         <MessageCard index={index} key={message.id || index} message={message} />
       ))}
+      {streamDraft?.sessionId === state.sessionId && (
+        <>
+          <MessageCard index={state.data.messages.length} message={streamDraft.userMessage} />
+          <StreamingMessageCard draft={streamDraft} />
+        </>
+      )}
     </div>
+  );
+}
+
+function SessionComposer({
+  disabled,
+  error,
+  model,
+  modelOptions,
+  selectedSession,
+  streamDraft,
+  text,
+  onModelChange,
+  onStop,
+  onSubmit,
+  onTextChange,
+}: {
+  disabled: boolean;
+  error: string;
+  model: string;
+  modelOptions: string[];
+  selectedSession: SessionSummary | null;
+  streamDraft: StreamDraft | null;
+  text: string;
+  onModelChange: (value: string) => void;
+  onStop: () => void;
+  onSubmit: () => void;
+  onTextChange: (value: string) => void;
+}) {
+  const isStreaming =
+    streamDraft?.status === "connecting" || streamDraft?.status === "streaming";
+
+  return (
+    <form
+      className="composer-panel"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmit();
+      }}
+    >
+      <div className="composer-toolbar">
+        <label className="composer-model">
+          <span>Model</span>
+          <select
+            disabled={disabled || isStreaming}
+            value={model}
+            onChange={(event) => onModelChange(event.target.value)}
+          >
+            <option value="">Default model</option>
+            {modelOptions.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span className={`composer-state ${streamDraft?.status ?? "idle"}`}>
+          {streamDraft?.statusLabel ?? (selectedSession ? "Ready" : "No session")}
+        </span>
+      </div>
+      <textarea
+        disabled={disabled || isStreaming}
+        placeholder="Continue this session"
+        rows={4}
+        value={text}
+        onChange={(event) => onTextChange(event.target.value)}
+      />
+      <div className="composer-actions">
+        {error && <span className="composer-error">{error}</span>}
+        {streamDraft?.error && <span className="composer-error">{streamDraft.error}</span>}
+        <div className="composer-buttons">
+          {isStreaming && (
+            <button className="secondary-button" type="button" onClick={onStop}>
+              Stop
+            </button>
+          )}
+          <button disabled={disabled || isStreaming} type="submit">
+            Send
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
+function StreamingMessageCard({ draft }: { draft: StreamDraft }) {
+  return (
+    <article className={`message-card assistant streaming ${draft.status}`}>
+      <div className="message-avatar" aria-hidden="true">
+        As
+      </div>
+      <div className="message-content">
+        <div className="message-header">
+          <strong>Assistant</strong>
+          <span>{draft.statusLabel}</span>
+        </div>
+        <div className="message-parts">
+          {draft.tools.length > 0 && (
+            <div className="stream-tools">
+              {draft.tools.map((tool, index) => (
+                <span className="tool-chip" key={`${tool}-${index}`}>
+                  {tool}
+                </span>
+              ))}
+            </div>
+          )}
+          {draft.thinkingText && (
+            <details className="part-block reasoning-part" open>
+              <summary>Reasoning</summary>
+              <div className="part-text">{draft.thinkingText}</div>
+            </details>
+          )}
+          {draft.assistantText ? (
+            <MarkdownContent source={draft.assistantText} />
+          ) : (
+            <div className="message-text muted">
+              {draft.status === "error"
+                ? draft.error || "Stream failed"
+                : draft.status === "stopped"
+                  ? "Generation stopped."
+                  : "Waiting for output..."}
+            </div>
+          )}
+        </div>
+      </div>
+    </article>
   );
 }
 
@@ -655,6 +984,13 @@ function deriveModelOptions(sessions: SessionSummary[]) {
   ).sort((a, b) => a.localeCompare(b));
 }
 
+function deriveComposerModelOptions(modelOptions: string[], currentModel: string) {
+  const normalizedCurrent = normalizeModelValue(currentModel);
+  const options = new Set(modelOptions.map(normalizeModelValue).filter(Boolean));
+  if (normalizedCurrent) options.add(normalizedCurrent);
+  return Array.from(options).sort((a, b) => a.localeCompare(b));
+}
+
 function deriveProviderOptions(models: string[]) {
   return Array.from(new Set(models.map(providerForModel).filter(Boolean))).sort((a, b) =>
     a.localeCompare(b),
@@ -675,6 +1011,35 @@ function isProviderHidden(model: string, hiddenProviders: string[]) {
 
 function isModelUnavailable(model: string, availableModels: string[]) {
   return Boolean(model && availableModels.length > 0 && !availableModels.includes(model));
+}
+
+function normalizeModelValue(model: string | undefined) {
+  const normalized = (model || "").trim();
+  return normalized && normalized.toUpperCase() !== "N/A" ? normalized : "";
+}
+
+function appendStreamText(current: string, incoming: string) {
+  return current + incoming.replace(/\\n/g, "\n");
+}
+
+function toolLabel(data: string) {
+  try {
+    const parsed = JSON.parse(data) as { tool?: unknown; input?: unknown };
+    const tool = stringValue(parsed.tool) || "tool";
+    const input = stringValue(parsed.input);
+    return input ? `${tool}: ${input.slice(0, 80)}` : tool;
+  } catch (_) {
+    return data || "tool";
+  }
+}
+
+function streamErrorText(data: string) {
+  try {
+    const parsed = JSON.parse(data) as { error?: unknown; message?: unknown };
+    return stringValue(parsed.message || parsed.error || data);
+  } catch (_) {
+    return data || "Stream failed";
+  }
 }
 
 function readHiddenProviders() {
