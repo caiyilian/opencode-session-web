@@ -13,12 +13,14 @@ import remarkGfm from "remark-gfm";
 import {
   compareSessions,
   createNewSessionStream,
+  deleteSession,
   getAvailableModels,
   getDirectories,
   getSession,
   getSessionStreamUrl,
   getSessions,
   getStats,
+  undoSession,
   type DirectorySummary,
   type CompareResponse,
   type CompareSession,
@@ -74,6 +76,12 @@ type CompareState =
   | { status: "ready"; data: CompareResponse }
   | { status: "error"; message: string };
 
+type SessionActionState =
+  | { status: "idle" }
+  | { status: "loading"; action: "delete" | "undo" }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
 type StreamStatus = "connecting" | "streaming" | "done" | "error" | "stopped";
 
 interface SessionFilters {
@@ -100,6 +108,9 @@ export default function App() {
   const [composerText, setComposerText] = useState("");
   const [composerModel, setComposerModel] = useState("");
   const [composerError, setComposerError] = useState("");
+  const [sessionActionState, setSessionActionState] = useState<SessionActionState>({
+    status: "idle",
+  });
   const [streamDraft, setStreamDraft] = useState<StreamDraft | null>(null);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [newSessionDirectory, setNewSessionDirectory] = useState("");
@@ -229,6 +240,7 @@ export default function App() {
     eventSourceRef.current = null;
     setStreamDraft(null);
     setComposerError("");
+    setSessionActionState({ status: "idle" });
     setComposerModel((currentModel) => {
       if (currentModel && composerModelOptions.includes(currentModel)) return currentModel;
       return composerModelOptions[0] ?? "";
@@ -267,10 +279,51 @@ export default function App() {
           };
         });
         if (selectSessionId) dispatch({ type: "selectSession", value: selectSessionId });
+        return sessions.sessions;
       })
       .catch((error: unknown) => {
         setLoadState({ status: "error", message: errorText(error) });
+        return [];
       });
+  }
+
+  async function undoSelectedSession() {
+    if (!selectedSession) return;
+    if (!window.confirm(`Undo the latest turn in "${selectedSession.title || "Untitled session"}"?`)) {
+      return;
+    }
+
+    const sessionId = selectedSession.id;
+    setSessionActionState({ status: "loading", action: "undo" });
+    try {
+      await undoSession(sessionId);
+      await refreshDashboard(sessionId);
+      await reloadSessionDetail(sessionId, true);
+      setSessionActionState({ status: "success", message: "Latest turn undone" });
+    } catch (error) {
+      setSessionActionState({ status: "error", message: errorText(error) });
+    }
+  }
+
+  async function deleteSelectedSession() {
+    if (!selectedSession) return;
+    if (!window.confirm(`Delete "${selectedSession.title || "Untitled session"}"? This cannot be undone.`)) {
+      return;
+    }
+
+    const sessionId = selectedSession.id;
+    setSessionActionState({ status: "loading", action: "delete" });
+    try {
+      await deleteSession(sessionId);
+      const sessions = await refreshDashboard();
+      const nextSessionId = sessions.find((session) => session.id !== sessionId)?.id ?? "";
+      dispatch({ type: "selectSession", value: nextSessionId });
+      if (!nextSessionId) setDetailState({ status: "idle" });
+      setStreamDraft(null);
+      setSessionActionState({ status: "success", message: "Session deleted" });
+    } catch (error) {
+      setSessionActionState({ status: "error", message: errorText(error) });
+    }
   }
 
   function stopStream() {
@@ -740,36 +793,43 @@ export default function App() {
                 <span>{selectedSession?.message_count ?? 0} messages</span>
               </div>
               {selectedSession ? (
-                <dl className="detail-list">
-                  <div>
-                    <dt>Project</dt>
-                    <dd>{selectedSession.project}</dd>
-                  </div>
-                  <div>
-                    <dt>Directory</dt>
-                    <dd>{selectedSession.directory}</dd>
-                  </div>
-                  <div>
-                    <dt>Model</dt>
-                    <dd className="value-stack">
-                      <span>{selectedSession.model || "N/A"}</span>
-                      {isProviderHidden(selectedSession.model, browseState.hiddenProviders) && (
-                        <span className="inline-status muted">Provider hidden locally</span>
-                      )}
-                      {isModelUnavailable(selectedSession.model, data.availableModels) && (
-                        <span className="inline-status warning">Model not in available list</span>
-                      )}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Updated</dt>
-                    <dd>{selectedSession.time_updated}</dd>
-                  </div>
-                  <div>
-                    <dt>Cost</dt>
-                    <dd>${selectedSession.cost.toFixed(6)}</dd>
-                  </div>
-                </dl>
+                <>
+                  <dl className="detail-list">
+                    <div>
+                      <dt>Project</dt>
+                      <dd>{selectedSession.project}</dd>
+                    </div>
+                    <div>
+                      <dt>Directory</dt>
+                      <dd>{selectedSession.directory}</dd>
+                    </div>
+                    <div>
+                      <dt>Model</dt>
+                      <dd className="value-stack">
+                        <span>{selectedSession.model || "N/A"}</span>
+                        {isProviderHidden(selectedSession.model, browseState.hiddenProviders) && (
+                          <span className="inline-status muted">Provider hidden locally</span>
+                        )}
+                        {isModelUnavailable(selectedSession.model, data.availableModels) && (
+                          <span className="inline-status warning">Model not in available list</span>
+                        )}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Updated</dt>
+                      <dd>{selectedSession.time_updated}</dd>
+                    </div>
+                    <div>
+                      <dt>Cost</dt>
+                      <dd>${selectedSession.cost.toFixed(6)}</dd>
+                    </div>
+                  </dl>
+                  <SessionActions
+                    state={sessionActionState}
+                    onDelete={deleteSelectedSession}
+                    onUndo={undoSelectedSession}
+                  />
+                </>
               ) : (
                 <PanelStatus label="No session selected" />
               )}
@@ -896,6 +956,33 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
     <div className="summary-item">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function SessionActions({
+  state,
+  onDelete,
+  onUndo,
+}: {
+  state: SessionActionState;
+  onDelete: () => void;
+  onUndo: () => void;
+}) {
+  const isBusy = state.status === "loading";
+
+  return (
+    <div className="session-actions">
+      <div className="session-action-buttons">
+        <button disabled={isBusy} type="button" onClick={onUndo}>
+          {state.status === "loading" && state.action === "undo" ? "Undoing" : "Undo last turn"}
+        </button>
+        <button className="danger" disabled={isBusy} type="button" onClick={onDelete}>
+          {state.status === "loading" && state.action === "delete" ? "Deleting" : "Delete session"}
+        </button>
+      </div>
+      {state.status === "success" && <p className="action-message success">{state.message}</p>}
+      {state.status === "error" && <p className="action-message error">{state.message}</p>}
     </div>
   );
 }
