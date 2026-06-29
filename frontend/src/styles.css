@@ -517,6 +517,128 @@ select {
   padding: 14px;
 }
 
+.composer-panel {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #e3e8f0;
+  padding: 14px;
+  background: #fbfcfe;
+}
+
+.composer-toolbar,
+.composer-actions,
+.composer-buttons {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.composer-toolbar,
+.composer-actions {
+  justify-content: space-between;
+}
+
+.composer-model {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: #596171;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.composer-model select {
+  max-width: min(420px, 48vw);
+  height: 32px;
+  border: 1px solid #cfd6e2;
+  border-radius: 6px;
+  padding: 0 28px 0 9px;
+  color: #202124;
+  background: #ffffff;
+}
+
+.composer-state {
+  border: 1px solid #d9e0ea;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #52606f;
+  background: #ffffff;
+  font-size: 12px;
+}
+
+.composer-state.streaming,
+.composer-state.connecting {
+  border-color: #9fbbe8;
+  color: #24456f;
+  background: #eaf2ff;
+}
+
+.composer-state.error {
+  border-color: #fed7aa;
+  color: #9a3412;
+  background: #fff7ed;
+}
+
+.composer-panel textarea {
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+  border: 1px solid #cfd6e2;
+  border-radius: 8px;
+  padding: 10px 11px;
+  color: #202124;
+  background: #ffffff;
+  outline: none;
+  line-height: 1.45;
+}
+
+.composer-panel textarea:focus,
+.composer-model select:focus {
+  border-color: #2864c8;
+}
+
+.composer-panel textarea:disabled,
+.composer-model select:disabled {
+  color: #8a94a6;
+  background: #edf1f6;
+}
+
+.composer-error {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #9a3412;
+  font-size: 12px;
+}
+
+.composer-buttons {
+  margin-left: auto;
+}
+
+.composer-buttons button {
+  height: 34px;
+  border: 1px solid #2864c8;
+  border-radius: 6px;
+  padding: 0 14px;
+  color: #ffffff;
+  background: #2864c8;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.composer-buttons button:disabled {
+  border-color: #cfd6e2;
+  color: #8a94a6;
+  background: #edf1f6;
+  cursor: default;
+}
+
+.composer-buttons .secondary-button {
+  border-color: #cfd6e2;
+  color: #24456f;
+  background: #ffffff;
+}
+
 .message-card {
   display: grid;
   min-width: 0;
@@ -534,6 +656,11 @@ select {
 
 .message-card.assistant {
   background: #ffffff;
+}
+
+.message-card.streaming {
+  border-color: #9fbbe8;
+  background: #f8fbff;
 }
 
 .message-avatar {
@@ -577,6 +704,25 @@ select {
   display: grid;
   gap: 10px;
   margin-top: 9px;
+}
+
+.stream-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tool-chip {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid #c7d2fe;
+  border-radius: 999px;
+  padding: 3px 8px;
+  text-overflow: ellipsis;
+  color: #374151;
+  background: #eef2ff;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .message-text,
@@ -790,6 +936,20 @@ select {
     min-width: 0;
     margin-top: 14px;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .composer-toolbar,
+  .composer-actions {
+    display: grid;
+    justify-content: stretch;
+  }
+
+  .composer-model {
+    display: grid;
+  }
+
+  .composer-model select {
+    max-width: 100%;
   }
 
   .detail-panel + .detail-panel {

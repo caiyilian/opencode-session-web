@@ -55,6 +55,8 @@ def test_react_app_loads_core_api_data():
     assert "OpenCode Sessions" in app_source
     assert "Collapse sidebar" in app_source
     assert "MessageTimeline" in app_source
+    assert "SessionComposer" in app_source
+    assert "EventSource" in app_source
     assert "ReactMarkdown" in app_source
     assert "remarkGfm" in app_source
     assert "step-finish" in app_source
