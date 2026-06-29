@@ -10,7 +10,7 @@ import subprocess
 import queue
 import threading
 import time
-from flask import Flask, jsonify, request, render_template, Response, stream_with_context
+from flask import Flask, jsonify, request, render_template, Response, stream_with_context, send_from_directory, abort
 from config import AppConfig
 from db import (
     connect_db,
@@ -1244,6 +1244,9 @@ def api_session_undo(session_id):
 
 @app.route("/")
 def index():
+    if should_serve_frontend_dist():
+        return send_from_directory(app.config["OPENCODE_FRONTEND_DIST_DIR"], "index.html")
+
     static_dir = os.path.join(app.root_path, "static")
     asset_paths = [
         os.path.join(static_dir, "css", "main.css"),
@@ -1251,6 +1254,23 @@ def index():
     ]
     asset_version = int(max(os.path.getmtime(path) for path in asset_paths if os.path.exists(path)))
     return render_template("index.html", asset_version=asset_version)
+
+
+@app.route("/frontend/assets/<path:filename>")
+def frontend_dist_asset(filename):
+    if not should_serve_frontend_dist():
+        abort(404)
+    return send_from_directory(
+        os.path.join(app.config["OPENCODE_FRONTEND_DIST_DIR"], "assets"),
+        filename,
+    )
+
+
+def should_serve_frontend_dist():
+    return (
+        bool(app.config.get("OPENCODE_USE_FRONTEND_DIST"))
+        and os.path.isfile(os.path.join(app.config["OPENCODE_FRONTEND_DIST_DIR"], "index.html"))
+    )
 
 
 # ── 启动 ──────────────────────────────────────────────
