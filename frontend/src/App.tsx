@@ -791,6 +791,11 @@ export default function App() {
               )}
             </section>
 
+            <StatsPanel
+              stats={data.stats}
+              onSelectSession={(sessionId) => dispatch({ type: "selectSession", value: sessionId })}
+            />
+
             <section className="detail-panel timeline-panel">
               <div className="panel-heading">
                 <h3>Messages</h3>
@@ -881,6 +886,105 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function StatsPanel({
+  stats,
+  onSelectSession,
+}: {
+  stats: StatsResponse;
+  onSelectSession: (sessionId: string) => void;
+}) {
+  const maxModelCount = maxCount(stats.top_models.map((model) => model.count));
+  const maxDirectoryCount = maxCount(stats.top_directories.map((directory) => directory.count));
+
+  return (
+    <section className="detail-panel stats-panel">
+      <div className="panel-heading">
+        <h3>Usage Stats</h3>
+        <span>{formatNumber(stats.total_sessions)} sessions</span>
+      </div>
+      <div className="stats-metrics">
+        <SummaryItem label="Projects" value={formatNumber(stats.total_projects)} />
+        <SummaryItem label="Cost" value={`$${stats.total_cost.toFixed(4)}`} />
+        <SummaryItem label="Input" value={formatTokens(stats.total_tokens_input)} />
+        <SummaryItem label="Output" value={formatTokens(stats.total_tokens_output)} />
+      </div>
+      <div className="stats-columns">
+        <StatsRankList
+          emptyLabel="No model stats"
+          items={stats.top_models.map((model) => ({
+            count: model.count,
+            label: model.model || "N/A",
+            maxCount: maxModelCount,
+          }))}
+          title="Top Models"
+        />
+        <StatsRankList
+          emptyLabel="No directory stats"
+          items={stats.top_directories.map((directory) => ({
+            count: directory.count,
+            label: directory.path,
+            maxCount: maxDirectoryCount,
+          }))}
+          title="Top Directories"
+        />
+        <section className="stats-column">
+          <h4>Recent Sessions</h4>
+          {stats.recent_sessions.length > 0 ? (
+            <div className="recent-session-list">
+              {stats.recent_sessions.map((session) => (
+                <button
+                  className="recent-session-row"
+                  key={session.id}
+                  type="button"
+                  onClick={() => onSelectSession(session.id)}
+                >
+                  <span>{session.title || "Untitled session"}</span>
+                  <span>{session.time_updated}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <PanelStatus label="No recent sessions" />
+          )}
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function StatsRankList({
+  emptyLabel,
+  items,
+  title,
+}: {
+  emptyLabel: string;
+  items: Array<{ count: number; label: string; maxCount: number }>;
+  title: string;
+}) {
+  return (
+    <section className="stats-column">
+      <h4>{title}</h4>
+      {items.length > 0 ? (
+        <div className="stats-rank-list">
+          {items.map((item) => (
+            <div className="stats-rank-row" key={`${title}-${item.label}`}>
+              <div className="stats-rank-header">
+                <span>{item.label || "N/A"}</span>
+                <strong>{formatNumber(item.count)}</strong>
+              </div>
+              <div className="stats-bar" aria-hidden="true">
+                <span style={{ width: `${percentage(item.count, item.maxCount)}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <PanelStatus label={emptyLabel} />
+      )}
+    </section>
   );
 }
 
@@ -1665,6 +1769,15 @@ function writeHiddenProviders(hiddenProviders: string[]) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat().format(value);
+}
+
+function maxCount(values: number[]) {
+  return Math.max(1, ...values);
+}
+
+function percentage(value: number, maxValue: number) {
+  if (maxValue <= 0) return 0;
+  return Math.max(4, Math.min(100, Math.round((value / maxValue) * 100)));
 }
 
 function formatTokens(value: number) {
