@@ -536,6 +536,115 @@ select {
   grid-column: 1 / -1;
 }
 
+.stats-panel {
+  grid-column: 1 / -1;
+}
+
+.stats-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 14px 14px 0;
+}
+
+.stats-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  padding: 14px;
+}
+
+.stats-column {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 10px;
+}
+
+.stats-column h4 {
+  color: #374151;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.stats-rank-list,
+.recent-session-list {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.stats-rank-row,
+.recent-session-row {
+  min-width: 0;
+  border: 1px solid #e3e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.stats-rank-row {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+}
+
+.stats-rank-header,
+.recent-session-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.stats-rank-header span,
+.recent-session-row span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-rank-header span {
+  color: #202124;
+  font-size: 12px;
+}
+
+.stats-rank-header strong,
+.recent-session-row span:last-child {
+  flex: 0 0 auto;
+  color: #697385;
+  font-size: 12px;
+}
+
+.stats-bar {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5e7eb;
+}
+
+.stats-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #2864c8;
+}
+
+.recent-session-row {
+  width: 100%;
+  padding: 9px;
+  color: #202124;
+  cursor: pointer;
+  text-align: left;
+}
+
+.recent-session-row:hover {
+  border-color: #b7c4d8;
+  background: #ffffff;
+}
+
 .panel-heading {
   display: flex;
   align-items: center;
@@ -1209,6 +1318,11 @@ select {
 
   .composer-model select {
     max-width: 100%;
+  }
+
+  .stats-metrics,
+  .stats-columns {
+    grid-template-columns: 1fr;
   }
 
   .detail-panel + .detail-panel {
