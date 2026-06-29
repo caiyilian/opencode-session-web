@@ -44,7 +44,11 @@ def test_react_app_loads_core_api_data():
     for helper in ["getStats", "getDirectories", "getSessions", "getAvailableModels"]:
         assert helper in app_source
 
+    for state_marker in ["useReducer", "selectedDirectory", "selectedModel", "blockedProviders"]:
+        assert state_marker in app_source
+
     assert 'status: "loading"' in app_source
     assert 'status: "ready"' in app_source
     assert 'status: "error"' in app_source
     assert "OpenCode Sessions" in app_source
+    assert "Collapse sidebar" in app_source
