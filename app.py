@@ -1060,8 +1060,6 @@ def api_session_fork(session_id):
 
             has_output = False
             last_output_time = time.time()
-            RATE_LIMIT_KW = ["rate limit", "quota", "exceeded", "too many", "retry-after",
-                             "free usage", "subscribe", "retrying in", "429"]
             while True:
                 try:
                     line = stdout_queue3.get(timeout=5)
@@ -1069,12 +1067,11 @@ def api_session_fork(session_id):
                     with stderr_lock3:
                         recent_stderr = list(stderr_lines[-10:])
                     if recent_stderr:
-                        combined = "\n".join(recent_stderr).lower()
-                        is_rate_limit = any(kw in combined for kw in RATE_LIMIT_KW)
-                        if is_rate_limit or not has_output:
+                        combined = "\n".join(recent_stderr)
+                        if is_known_error_text(combined) or not has_output:
                             terminate_fork_process()
                             err_text = "\n".join(recent_stderr[-5:])
-                            yield sse.stream_error(safe_truncate(err_text))
+                            yield sse.stream_error(safe_truncate(format_stream_error_message(err_text)))
                             return
                     if has_output and (time.time() - last_output_time > 120):
                         terminate_fork_process()
@@ -1105,10 +1102,9 @@ def api_session_fork(session_id):
                 except json.JSONDecodeError:
                     non_json = line.strip()
                     if non_json and len(non_json) > 5:
-                        lower_line = non_json.lower()
-                        if any(kw in lower_line for kw in RATE_LIMIT_KW):
+                        if is_known_error_text(non_json):
                             terminate_fork_process()
-                            yield sse.stream_error(safe_truncate(non_json))
+                            yield sse.stream_error(safe_truncate(format_stream_error_message(non_json)))
                             return
 
             proc.wait(timeout=600)
@@ -1117,7 +1113,7 @@ def api_session_fork(session_id):
                 recent_stderr = list(stderr_lines[-10:])
             if recent_stderr:
                 err_text = "\n".join(recent_stderr)
-                yield sse.stream_error(safe_truncate(err_text))
+                yield sse.stream_error(safe_truncate(format_stream_error_message(err_text)))
             stderr_thread.join(timeout=2)
 
         except FileNotFoundError:
