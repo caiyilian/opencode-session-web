@@ -208,6 +208,21 @@ def test_session_detail_and_compare_include_usage(client):
     assert total_compare_cost == pytest.approx(expected["cost"])
 
 
+def test_message_detail_schema_compatible(client):
+    test_client, _old_usage_columns = client
+
+    response = test_client.get("/api/messages/msg_ses_old")
+    missing = test_client.get("/api/messages/missing")
+
+    assert response.status_code == 200
+    assert missing.status_code == 404
+    payload = response.get_json()
+    assert payload["id"] == "msg_ses_old"
+    assert payload["session_id"] == "ses_old"
+    assert payload["data"]["role"] == "assistant"
+    assert payload["time_created"] == 1_700_000_004_000
+
+
 def test_token_stats_schema_compatible(client):
     test_client, old_usage_columns = client
     expected = _expected_usage(old_usage_columns)
