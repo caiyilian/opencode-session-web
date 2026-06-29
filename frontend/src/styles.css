@@ -1,6 +1,20 @@
 :root {
+  --app-bg: #f3f6fb;
+  --surface: #ffffff;
+  --surface-muted: #f8fafc;
+  --surface-raised: #fbfcfe;
+  --border: #d9e0ea;
+  --border-strong: #c9d3e2;
+  --text: #202124;
+  --text-strong: #101828;
+  --text-muted: #697385;
+  --primary: #2864c8;
+  --primary-hover: #1f55af;
+  --danger: #b42318;
+  --focus-ring: 0 0 0 3px rgba(40, 100, 200, 0.12);
+  --panel-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
   color: #202124;
-  background: #f5f7fa;
+  background: var(--app-bg);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
@@ -12,24 +26,48 @@
 
 body {
   margin: 0;
+  overflow-x: hidden;
+}
+
+html,
+body,
+#root {
+  min-width: 0;
 }
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
+}
+
+button,
+input,
+select,
+textarea {
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease;
 }
 
 .app-shell {
   display: grid;
+  width: 100%;
+  min-width: 0;
   min-height: 100vh;
   grid-template-columns: minmax(292px, 360px) minmax(0, 1fr);
-  background: #f5f7fa;
+  background: var(--app-bg);
 }
 
 .sidebar-shell {
   display: flex;
-  min-height: 100vh;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: 100vh;
   flex-direction: column;
   border-right: 1px solid #d8dee8;
   background: #ffffff;
@@ -61,6 +99,7 @@ select {
 
 .filter-stack {
   display: grid;
+  min-width: 0;
   gap: 10px;
   padding: 0 18px 12px;
 }
@@ -88,6 +127,7 @@ select {
 .filter-select:focus {
   border-color: #2864c8;
   background: #ffffff;
+  box-shadow: var(--focus-ring);
 }
 
 .filter-select:disabled {
@@ -177,6 +217,14 @@ select {
 
 .clear-filter-button:hover {
   background: #eef3f9;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .sidebar-meta {
@@ -350,7 +398,7 @@ select {
 
 .content-shell {
   min-width: 0;
-  padding: 22px 26px;
+  padding: 20px 26px 28px;
 }
 
 .content-header {
@@ -364,9 +412,14 @@ select {
 
 .header-title-row {
   display: flex;
+  flex: 1 1 auto;
   min-width: 0;
   align-items: flex-start;
   gap: 12px;
+}
+
+.header-title-row > div {
+  min-width: 0;
 }
 
 .sidebar-toggle {
@@ -455,7 +508,7 @@ select {
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
   gap: 18px;
   padding-top: 20px;
 }
@@ -465,6 +518,14 @@ select {
   border: 1px solid #d9e0ea;
   border-radius: 8px;
   background: #ffffff;
+  box-shadow: var(--panel-shadow);
+}
+
+.overview-column {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 18px;
 }
 
 .new-session-panel {
@@ -472,6 +533,7 @@ select {
   border: 1px solid #d9e0ea;
   border-radius: 8px;
   background: #ffffff;
+  box-shadow: var(--panel-shadow);
 }
 
 .fork-session-panel {
@@ -547,7 +609,10 @@ select {
 }
 
 .timeline-panel {
-  grid-column: 1 / -1;
+  display: grid;
+  min-width: 0;
+  align-self: start;
+  overflow: hidden;
 }
 
 .stats-panel {
@@ -796,6 +861,7 @@ select {
   gap: 12px;
   border-bottom: 1px solid #e3e8f0;
   padding: 13px 14px;
+  background: var(--surface-raised);
 }
 
 .panel-heading h3 {
@@ -862,10 +928,24 @@ select {
   cursor: pointer;
 }
 
+.session-action-buttons button:hover:not(:disabled),
+.new-session-panel .panel-heading button:hover:not(:disabled),
+.fork-session-panel .panel-heading button:hover:not(:disabled),
+.composer-buttons .secondary-button:hover:not(:disabled) {
+  border-color: #b7c4d8;
+  background: #eef3f9;
+}
+
 .session-action-buttons button.danger {
   border-color: #fecaca;
   color: #991b1b;
   background: #fef2f2;
+}
+
+.session-action-buttons button.danger:hover:not(:disabled) {
+  border-color: #fca5a5;
+  color: var(--danger);
+  background: #fff1f2;
 }
 
 .session-action-buttons button:disabled {
@@ -937,6 +1017,7 @@ select {
   color: #697385;
   background: #f8fafc;
   font-size: 13px;
+  line-height: 1.45;
 }
 
 .status-block {
@@ -954,6 +1035,9 @@ select {
 .message-timeline {
   display: grid;
   gap: 12px;
+  min-height: 240px;
+  max-height: min(44vh, 460px);
+  overflow: auto;
   padding: 14px;
 }
 
@@ -962,7 +1046,7 @@ select {
   gap: 10px;
   border-top: 1px solid #e3e8f0;
   padding: 14px;
-  background: #fbfcfe;
+  background: #ffffff;
 }
 
 .composer-toolbar,
@@ -1036,6 +1120,7 @@ select {
 .composer-panel textarea:focus,
 .composer-model select:focus {
   border-color: #2864c8;
+  box-shadow: var(--focus-ring);
 }
 
 .composer-panel textarea:disabled,
@@ -1066,6 +1151,11 @@ select {
   font-weight: 650;
 }
 
+.composer-buttons button:hover:not(:disabled),
+.new-session-button:hover {
+  background: var(--primary-hover);
+}
+
 .composer-buttons button:disabled {
   border-color: #cfd6e2;
   color: #8a94a6;
@@ -1079,6 +1169,17 @@ select {
   background: #ffffff;
 }
 
+@media (min-width: 981px) {
+  .sidebar-shell {
+    position: sticky;
+    top: 0;
+  }
+
+  .timeline-panel {
+    min-height: calc(100vh - 164px);
+  }
+}
+
 .message-card {
   display: grid;
   min-width: 0;
@@ -1088,6 +1189,7 @@ select {
   border-radius: 8px;
   padding: 12px;
   background: #fbfcfe;
+  box-shadow: 0 1px 1px rgba(16, 24, 40, 0.03);
 }
 
 .message-card.user {
@@ -1473,6 +1575,8 @@ select {
   }
 
   .sidebar-shell {
+    position: static;
+    height: auto;
     min-height: auto;
     border-right: 0;
     border-bottom: 1px solid #d8dee8;
@@ -1489,6 +1593,10 @@ select {
   .content-header,
   .workspace-grid {
     display: block;
+  }
+
+  .workspace-grid > * + * {
+    margin-top: 14px;
   }
 
   .header-title-row {
@@ -1528,6 +1636,11 @@ select {
   .compare-controls,
   .compare-grid {
     grid-template-columns: 1fr;
+  }
+
+  .message-timeline {
+    max-height: none;
+    overflow: visible;
   }
 
   .detail-panel + .detail-panel {
