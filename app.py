@@ -28,6 +28,128 @@ def get_db():
     return conn
 
 
+SESSION_USAGE_COLUMNS = {"cost", "tokens_input", "tokens_output"}
+
+
+def table_exists(conn, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def table_columns(conn, table_name: str) -> set[str]:
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})")}
+
+
+def has_table_column(conn, table_name: str, column_name: str) -> bool:
+    return column_name in table_columns(conn, table_name)
+
+
+def session_column_expr(conn, column_name: str, session_alias: str = "s", default_sql: str = "NULL") -> str:
+    if has_table_column(conn, "session", column_name):
+        return f"{session_alias}.{column_name}"
+    return default_sql
+
+
+def has_session_usage_columns(conn) -> bool:
+    return SESSION_USAGE_COLUMNS.issubset(table_columns(conn, "session"))
+
+
+def session_usage_query_parts(conn, session_alias: str = "s"):
+    """Return SQL fragments for usage fields across old/new OpenCode schemas."""
+    if has_session_usage_columns(conn):
+        return "", "", {
+            "cost": f"COALESCE({session_alias}.cost, 0)",
+            "tokens_input": f"COALESCE({session_alias}.tokens_input, 0)",
+            "tokens_output": f"COALESCE({session_alias}.tokens_output, 0)",
+        }
+
+    if not table_exists(conn, "part"):
+        return "", "", {
+            "cost": "0",
+            "tokens_input": "0",
+            "tokens_output": "0",
+        }
+
+    cte = """
+        WITH usage AS (
+            SELECT session_id,
+                   COALESCE(SUM(CAST(json_extract(data, '$.cost') AS REAL)), 0) AS cost,
+                   COALESCE(SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)), 0) AS tokens_input,
+                   COALESCE(SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)), 0) AS tokens_output
+            FROM part
+            WHERE json_extract(data, '$.type') = 'step-finish'
+            GROUP BY session_id
+        )
+    """
+    join = f"LEFT JOIN usage u ON u.session_id = {session_alias}.id"
+    return cte, join, {
+        "cost": "COALESCE(u.cost, 0)",
+        "tokens_input": "COALESCE(u.tokens_input, 0)",
+        "tokens_output": "COALESCE(u.tokens_output, 0)",
+    }
+
+
+def get_total_usage(conn):
+    if has_session_usage_columns(conn):
+        row = conn.execute(
+            """SELECT COALESCE(SUM(cost), 0) AS cost,
+                      COALESCE(SUM(tokens_input), 0) AS tokens_input,
+                      COALESCE(SUM(tokens_output), 0) AS tokens_output
+               FROM session"""
+        ).fetchone()
+    elif table_exists(conn, "part"):
+        row = conn.execute(
+            """SELECT COALESCE(SUM(CAST(json_extract(data, '$.cost') AS REAL)), 0) AS cost,
+                      COALESCE(SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)), 0) AS tokens_input,
+                      COALESCE(SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)), 0) AS tokens_output
+               FROM part
+               WHERE json_extract(data, '$.type') = 'step-finish'"""
+        ).fetchone()
+    else:
+        return {"cost": 0, "tokens_input": 0, "tokens_output": 0}
+
+    return {
+        "cost": row["cost"] or 0,
+        "tokens_input": row["tokens_input"] or 0,
+        "tokens_output": row["tokens_output"] or 0,
+    }
+
+
+def get_session_usage(conn, session_id: str):
+    if has_session_usage_columns(conn):
+        row = conn.execute(
+            """SELECT COALESCE(cost, 0) AS cost,
+                      COALESCE(tokens_input, 0) AS tokens_input,
+                      COALESCE(tokens_output, 0) AS tokens_output
+               FROM session
+               WHERE id = ?""",
+            (session_id,),
+        ).fetchone()
+    elif table_exists(conn, "part"):
+        row = conn.execute(
+            """SELECT COALESCE(SUM(CAST(json_extract(data, '$.cost') AS REAL)), 0) AS cost,
+                      COALESCE(SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)), 0) AS tokens_input,
+                      COALESCE(SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)), 0) AS tokens_output
+               FROM part
+               WHERE session_id = ?
+                 AND json_extract(data, '$.type') = 'step-finish'""",
+            (session_id,),
+        ).fetchone()
+    else:
+        return {"cost": 0, "tokens_input": 0, "tokens_output": 0}
+
+    if not row:
+        return {"cost": 0, "tokens_input": 0, "tokens_output": 0}
+    return {
+        "cost": row["cost"] or 0,
+        "tokens_input": row["tokens_input"] or 0,
+        "tokens_output": row["tokens_output"] or 0,
+    }
+
+
 # ── 工具函数 ──────────────────────────────────────────────
 
 def dict_from_row(row):
@@ -122,19 +244,20 @@ def api_stats():
 
     total_sessions = cursor.execute("SELECT COUNT(*) FROM session").fetchone()[0]
     total_projects = cursor.execute("SELECT COUNT(DISTINCT directory) FROM session").fetchone()[0]
-    total_cost = cursor.execute("SELECT COALESCE(SUM(cost), 0) FROM session").fetchone()[0]
-    total_tokens_input = cursor.execute("SELECT COALESCE(SUM(tokens_input), 0) FROM session").fetchone()[0]
-    total_tokens_output = cursor.execute("SELECT COALESCE(SUM(tokens_output), 0) FROM session").fetchone()[0]
+    total_usage = get_total_usage(conn)
 
     # Top 目录
     dirs = cursor.execute(
         "SELECT directory, COUNT(*) as cnt FROM session GROUP BY directory ORDER BY cnt DESC LIMIT 10"
     ).fetchall()
 
-    # Top 模型
-    models = cursor.execute(
-        "SELECT model, COUNT(*) as cnt FROM session WHERE model IS NOT NULL AND model != '' GROUP BY model ORDER BY cnt DESC LIMIT 10"
-    ).fetchall()
+    # Top 模型（新版 schema 可能不再在 session 表保存 model）
+    if has_table_column(conn, "session", "model"):
+        models = cursor.execute(
+            "SELECT model, COUNT(*) as cnt FROM session WHERE model IS NOT NULL AND model != '' GROUP BY model ORDER BY cnt DESC LIMIT 10"
+        ).fetchall()
+    else:
+        models = []
 
     # 最近活动
     recent = cursor.execute(
@@ -146,9 +269,9 @@ def api_stats():
     return jsonify({
         "total_sessions": total_sessions,
         "total_projects": total_projects,
-        "total_cost": round(total_cost, 6),
-        "total_tokens_input": total_tokens_input,
-        "total_tokens_output": total_tokens_output,
+        "total_cost": round(total_usage["cost"], 6),
+        "total_tokens_input": total_usage["tokens_input"],
+        "total_tokens_output": total_usage["tokens_output"],
         "top_directories": [{"path": r["directory"], "count": r["cnt"]} for r in dirs],
         "top_models": [{"model": r["model"], "count": r["cnt"]} for r in models],
         "recent_sessions": [{
@@ -182,8 +305,11 @@ def api_sessions():
         conditions.append("s.directory = ?")
         params.append(directory)
     if model:
-        conditions.append("s.model = ?")
-        params.append(model)
+        if has_table_column(conn, "session", "model"):
+            conditions.append("s.model = ?")
+            params.append(model)
+        else:
+            conditions.append("0 = 1")
 
     where = ""
     if conditions:
@@ -192,13 +318,23 @@ def api_sessions():
     # 总数
     total = cursor.execute(f"SELECT COUNT(*) FROM session s {where}", params).fetchone()[0]
 
+    usage_cte, usage_join, usage_expr = session_usage_query_parts(conn, "s")
+    model_expr = session_column_expr(conn, "model", "s", "NULL")
+    agent_expr = session_column_expr(conn, "agent", "s", "NULL")
+
     # 列表
     rows = cursor.execute(
-        f"""SELECT s.id, s.title, s.directory, s.model, s.agent,
+        f"""{usage_cte}
+            SELECT s.id, s.title, s.directory,
+                   {model_expr} AS model,
+                   {agent_expr} AS agent,
                    s.time_created, s.time_updated,
-                   s.cost, s.tokens_input, s.tokens_output,
+                   {usage_expr["cost"]} AS cost,
+                   {usage_expr["tokens_input"]} AS tokens_input,
+                   {usage_expr["tokens_output"]} AS tokens_output,
                    (SELECT COUNT(*) FROM message m WHERE m.session_id = s.id) as msg_count
             FROM session s
+            {usage_join}
             {where}
             ORDER BY s.time_updated DESC
             LIMIT ? OFFSET ?""",
@@ -305,9 +441,7 @@ def api_sessions_compare():
             "project": get_project_name(s["directory"]),
             "messages": msg_list,
             "message_count": len(msg_list),
-            "tokens_input": s.get("tokens_input", 0),
-            "tokens_output": s.get("tokens_output", 0),
-            "cost": s.get("cost", 0),
+            **get_session_usage(conn, sid),
         }
 
     s1 = load_session(id1)
@@ -342,6 +476,7 @@ def api_session_detail(session_id):
     session["agent"] = session.get("agent") or "N/A"
     session["time_created_fmt"] = format_time(session["time_created"])
     session["time_updated_fmt"] = format_time(session["time_updated"])
+    session.update(get_session_usage(conn, session_id))
 
     # 获取消息（含内容）
     messages = cursor.execute(
@@ -507,13 +642,16 @@ def api_models():
     conn = get_db()
     cursor = conn.cursor()
 
-    rows = cursor.execute(
-        """SELECT model, COUNT(*) as cnt
-           FROM session
-           WHERE model IS NOT NULL AND model != ''
-           GROUP BY model
-           ORDER BY cnt DESC"""
-    ).fetchall()
+    if has_table_column(conn, "session", "model"):
+        rows = cursor.execute(
+            """SELECT model, COUNT(*) as cnt
+               FROM session
+               WHERE model IS NOT NULL AND model != ''
+               GROUP BY model
+               ORDER BY cnt DESC"""
+        ).fetchall()
+    else:
+        rows = []
     conn.close()
 
     return jsonify({"models": [{"name": format_model(r["model"]), "count": r["cnt"]} for r in rows]})
@@ -1111,51 +1249,63 @@ def api_stats_tokens():
     """Token 消耗统计（按天/模型/项目）"""
     conn = get_db()
     cursor = conn.cursor()
+    usage_cte, usage_join, usage_expr = session_usage_query_parts(conn, "s")
+    model_expr = session_column_expr(conn, "model", "s", "'N/A'")
 
     # 最近 30 天每日 Token
     thirty_days_ago = (int(time.time()) - 30 * 86400) * 1000
     daily = cursor.execute(
-        """SELECT DATE(time_created / 1000, 'unixepoch') as day,
-                  SUM(tokens_input) as inp,
-                  SUM(tokens_output) as out
-           FROM session
-           WHERE time_created > ?
+        f"""{usage_cte}
+           SELECT DATE(s.time_created / 1000, 'unixepoch') as day,
+                  SUM({usage_expr["tokens_input"]}) as inp,
+                  SUM({usage_expr["tokens_output"]}) as out
+           FROM session s
+           {usage_join}
+           WHERE s.time_created > ?
            GROUP BY day
            ORDER BY day""",
         (thirty_days_ago,),
     ).fetchall()
 
     # 按模型汇总
+    model_where = "WHERE s.model IS NOT NULL AND s.model != ''" if has_table_column(conn, "session", "model") else ""
     by_model = cursor.execute(
-        """SELECT model,
-                  SUM(tokens_input) as inp,
-                  SUM(tokens_output) as out,
-                  SUM(cost) as cst
-           FROM session
-           WHERE model IS NOT NULL AND model != ''
-           GROUP BY model
+        f"""{usage_cte}
+           SELECT {model_expr} AS model,
+                  SUM({usage_expr["tokens_input"]}) as inp,
+                  SUM({usage_expr["tokens_output"]}) as out,
+                  SUM({usage_expr["cost"]}) as cst
+           FROM session s
+           {usage_join}
+           {model_where}
+           GROUP BY {model_expr}
            ORDER BY inp DESC
            LIMIT 15""",
     ).fetchall()
 
     # 按项目汇总
     by_project = cursor.execute(
-        """SELECT directory,
-                  SUM(tokens_input) as inp,
-                  SUM(tokens_output) as out,
+        f"""{usage_cte}
+           SELECT s.directory,
+                  SUM({usage_expr["tokens_input"]}) as inp,
+                  SUM({usage_expr["tokens_output"]}) as out,
                   COUNT(*) as cnt
-           FROM session
-           GROUP BY directory
+           FROM session s
+           {usage_join}
+           GROUP BY s.directory
            ORDER BY inp DESC
            LIMIT 15""",
     ).fetchall()
 
-    conn.close()
-
     # 全量总消耗（不受 LIMIT 限制）
-    conn2 = get_db()
-    total_cost_all = conn2.execute("SELECT COALESCE(SUM(cost), 0) FROM session").fetchone()[0]
-    conn2.close()
+    total_cost_all = cursor.execute(
+        f"""{usage_cte}
+           SELECT COALESCE(SUM({usage_expr["cost"]}), 0)
+           FROM session s
+           {usage_join}"""
+    ).fetchone()[0]
+
+    conn.close()
 
     return jsonify({
         "daily": [{"day": r["day"], "input": r["inp"] or 0, "output": r["out"] or 0} for r in daily],
