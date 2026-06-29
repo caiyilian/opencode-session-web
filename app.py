@@ -900,17 +900,17 @@ def api_session_new():
                             terminate_new_session_process()
                             err_text = "\n".join(recent_stderr[-5:])
                             had_error = True
-                            yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
+                            yield sse.stream_error(safe_truncate(err_text))
                             return
                     # 无任何输出超过 25 秒，终止
                     elapsed = int(time.time() - last_output_time)
                     if elapsed > 25:
                         terminate_new_session_process()
                         had_error = True
-                        yield f"event: stream_error\ndata: 模型无响应（可能已达到使用限制），请切换模型后重试\n\n"
+                        yield sse.stream_error("模型无响应（可能已达到使用限制），请切换模型后重试")
                         return
                     # 发送状态事件，防止前端 30 秒超时
-                    yield f"event: status\ndata: waiting\n\n"
+                    yield sse.status("waiting")
                     continue
                 if line is None:
                     break
@@ -961,31 +961,31 @@ def api_session_new():
                         logger.warning("new-session stream error detected: %s", err_text[:200])
                         terminate_new_session_process()
                         had_error = True
-                        yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
+                        yield sse.stream_error(safe_truncate(err_text))
                         return
 
                     if ev_type == "text":
                         txt = part.get("text", "")
                         if txt:
                             safe = txt.replace("\n", "\\n")
-                            yield f"event: text\ndata: {safe}\n\n"
+                            yield sse.event("text", safe)
                     elif ev_type == "reasoning" or part.get("type") == "reasoning":
                         txt = part.get("text", ev.get("text", ""))
                         if txt:
                             safe = txt.replace("\n", "\\n")
-                            yield f"event: thinking\ndata: {safe}\n\n"
+                            yield sse.event("thinking", safe)
                     elif ev_type == "tool_use" or part.get("type") == "tool":
                         tname = part.get("tool", ev.get("tool", ""))
                         tinp = part.get("input", "") or part.get("arguments", "") or ""
-                        yield f"event: tool_use\ndata: {json.dumps({'tool': tname, 'input': str(tinp)[:200]})}\n\n"
+                        yield sse.json_event("tool_use", {"tool": tname, "input": str(tinp)[:200]})
                     elif ev_type == "tool_result" or part.get("type") == "tool_result":
                         tname = part.get("tool_name", "")
-                        yield f"event: tool_result\ndata: {json.dumps({'tool': tname, 'status': 'done'})}\n\n"
+                        yield sse.json_event("tool_result", {"tool": tname, "status": "done"})
                     elif ev_type == "step_start":
-                        yield "event: status\ndata: step_start\n\n"
+                        yield sse.status("step_start")
                     elif ev_type == "step_finish":
                         tokens = part.get("tokens", {})
-                        yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
+                        yield sse.done({"session_id": new_session_id or "", "tokens": tokens, "cost": part.get("cost", 0)})
                     elif ev_type and ev_type not in ("step_start", "step_finish"):
                         logger.debug("new-session unknown event_type=%s data=%s", ev_type, line[:200])
                 except json.JSONDecodeError:
@@ -996,7 +996,7 @@ def api_session_new():
                         if any(kw in lower_line for kw in RATE_LIMIT_KW):
                             terminate_new_session_process()
                             had_error = True
-                            yield f"event: stream_error\ndata: {safe_truncate(non_json)}\n\n"
+                            yield sse.stream_error(safe_truncate(non_json))
                             return
 
             proc.wait(timeout=600)
@@ -1007,21 +1007,21 @@ def api_session_new():
             if recent_stderr:
                 err_text = "\n".join(recent_stderr)
                 had_error = True
-                yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
+                yield sse.stream_error(safe_truncate(err_text))
 
             stderr_thread2.join(timeout=2)
 
         except FileNotFoundError:
             had_error = True
-            yield "event: stream_error\ndata: opencode CLI 未找到，请确认已安装 opencode\n\n"
+            yield sse.stream_error("opencode CLI 未找到，请确认已安装 opencode")
         except subprocess.TimeoutExpired:
             had_error = True
             if proc:
                 process_manager.terminate(proc, timeout=2)
-            yield "event: stream_error\ndata: 请求超时\n\n"
+            yield sse.stream_error("请求超时")
         except Exception as e:
             had_error = True
-            yield f"event: stream_error\ndata: {str(e)}\n\n"
+            yield sse.stream_error(str(e))
         finally:
             if proc:
                 process_manager.unregister(proc)
@@ -1030,7 +1030,7 @@ def api_session_new():
             if stderr_thread2:
                 stderr_thread2.join(timeout=2)
             if not had_error:
-                yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or ''})}\n\n"
+                yield sse.done({"session_id": new_session_id or ""})
 
     return Response(
         stream_with_context(generate()),
