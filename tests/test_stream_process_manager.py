@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import subprocess
 
 import app as webapp
@@ -49,6 +50,22 @@ class FakeStreamProcessManager:
     def unregister(self, process):
         self.unregistered.append(process)
         return True
+
+
+def create_session_db(path, directory):
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """CREATE TABLE session (
+            id TEXT PRIMARY KEY,
+            directory TEXT
+        )"""
+    )
+    conn.execute(
+        "INSERT INTO session (id, directory) VALUES (?, ?)",
+        ("ses_1", str(directory)),
+    )
+    conn.commit()
+    conn.close()
 
 
 def test_run_opencode_stream_uses_process_manager_for_normal_exit(monkeypatch):
@@ -124,6 +141,59 @@ def test_new_session_stream_terminates_process_manager_on_error(monkeypatch, tmp
         response = client.post(
             "/api/sessions/new",
             json={"directory": str(tmp_path), "message": "hello"},
+            buffered=True,
+        )
+
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert "event: stream_error" in body
+    assert "quota exceeded" in body
+    assert manager.terminated == [(process, 2)]
+    assert manager.unregistered == [process]
+
+
+def test_fork_session_stream_uses_process_manager_for_normal_exit(monkeypatch, tmp_path):
+    db_path = tmp_path / "opencode.db"
+    create_session_db(db_path, tmp_path)
+    process = FakeStreamProcess([
+        json.dumps({
+            "sessionID": "ses_fork",
+            "type": "step_finish",
+            "part": {"tokens": {"total": 3}, "cost": 0.01},
+        }) + "\n"
+    ])
+    manager = FakeStreamProcessManager(process)
+    monkeypatch.setattr(webapp, "process_manager", manager)
+    app = webapp.create_app({"TESTING": True, "OPENCODE_DB_PATH": str(db_path)})
+
+    with app.test_client() as client:
+        response = client.post(
+            "/api/sessions/ses_1/fork",
+            json={"message": "hello"},
+            buffered=True,
+        )
+
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert manager.started[0][0][:6] == ["opencode", "run", "--dir", str(tmp_path), "--fork", "-s"]
+    assert "event: done" in body
+    assert "ses_fork" in body
+    assert manager.terminated == []
+    assert manager.unregistered == [process]
+
+
+def test_fork_session_stream_terminates_process_manager_on_non_json_rate_limit(monkeypatch, tmp_path):
+    db_path = tmp_path / "opencode.db"
+    create_session_db(db_path, tmp_path)
+    process = FakeStreamProcess(["quota exceeded\n"])
+    manager = FakeStreamProcessManager(process)
+    monkeypatch.setattr(webapp, "process_manager", manager)
+    app = webapp.create_app({"TESTING": True, "OPENCODE_DB_PATH": str(db_path)})
+
+    with app.test_client() as client:
+        response = client.post(
+            "/api/sessions/ses_1/fork",
+            json={"message": "hello"},
             buffered=True,
         )
 
