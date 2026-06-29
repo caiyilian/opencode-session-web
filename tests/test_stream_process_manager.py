@@ -101,6 +101,23 @@ def test_run_opencode_stream_terminates_process_manager_on_error(monkeypatch):
     assert manager.unregistered == [process]
 
 
+def test_run_opencode_stream_ignores_tool_calls_step_finish(monkeypatch):
+    process = FakeStreamProcess([
+        json.dumps({
+            "type": "step_finish",
+            "part": {"reason": "tool-calls", "tokens": {"total": 3}, "cost": 0.01},
+        }) + "\n"
+    ])
+    manager = FakeStreamProcessManager(process)
+    monkeypatch.setattr(webapp, "process_manager", manager)
+
+    events = list(webapp.run_opencode_stream(["opencode", "run"], "ses_1", timeout=1))
+
+    assert not any("event: done" in event for event in events)
+    assert manager.terminated == []
+    assert manager.unregistered == [process]
+
+
 def test_new_session_stream_uses_process_manager_for_normal_exit(monkeypatch, tmp_path):
     process = FakeStreamProcess([
         json.dumps({
