@@ -1196,11 +1196,11 @@ def api_session_fork(session_id):
                         if is_rate_limit or not has_output:
                             terminate_fork_process()
                             err_text = "\n".join(recent_stderr[-5:])
-                            yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
+                            yield sse.stream_error(safe_truncate(err_text))
                             return
                     if has_output and (time.time() - last_output_time > 120):
                         terminate_fork_process()
-                        yield "event: stream_error\ndata: 请求超时（120 秒无输出）\n\n"
+                        yield sse.stream_error("请求超时（120 秒无输出）")
                         return
                     continue
                 if line is None:
@@ -1218,30 +1218,30 @@ def api_session_fork(session_id):
                     if ev_type == "text":
                         txt = part.get("text", "")
                         if txt:
-                            yield f"event: text\ndata: {txt.replace(chr(10), '\\n')}\n\n"
+                            yield sse.event("text", txt.replace(chr(10), "\\n"))
                     elif ev_type == "reasoning" or part.get("type") == "reasoning":
                         txt = part.get("text", ev.get("text", ""))
                         if txt:
-                            yield f"event: thinking\ndata: {txt.replace(chr(10), '\\n')}\n\n"
+                            yield sse.event("thinking", txt.replace(chr(10), "\\n"))
                     elif ev_type == "tool_use" or part.get("type") == "tool":
                         tname = part.get("tool", ev.get("tool", ""))
                         tinp = part.get("input", "") or part.get("arguments", "") or ""
-                        yield f"event: tool_use\ndata: {json.dumps({'tool': tname, 'input': str(tinp)[:200]})}\n\n"
+                        yield sse.json_event("tool_use", {"tool": tname, "input": str(tinp)[:200]})
                     elif ev_type == "tool_result" or part.get("type") == "tool_result":
                         tname = part.get("tool_name", "")
-                        yield f"event: tool_result\ndata: {json.dumps({'tool': tname, 'status': 'done'})}\n\n"
+                        yield sse.json_event("tool_result", {"tool": tname, "status": "done"})
                     elif ev_type == "step_start":
-                        yield "event: status\ndata: step_start\n\n"
+                        yield sse.status("step_start")
                     elif ev_type == "step_finish":
                         tokens = part.get("tokens", {})
-                        yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or '', 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
+                        yield sse.done({"session_id": new_session_id or "", "tokens": tokens, "cost": part.get("cost", 0)})
                 except json.JSONDecodeError:
                     non_json = line.strip()
                     if non_json and len(non_json) > 5:
                         lower_line = non_json.lower()
                         if any(kw in lower_line for kw in RATE_LIMIT_KW):
                             terminate_fork_process()
-                            yield f"event: stream_error\ndata: {safe_truncate(non_json)}\n\n"
+                            yield sse.stream_error(safe_truncate(non_json))
                             return
 
             proc.wait(timeout=600)
@@ -1250,17 +1250,17 @@ def api_session_fork(session_id):
                 recent_stderr = list(stderr_lines[-10:])
             if recent_stderr:
                 err_text = "\n".join(recent_stderr)
-                yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
+                yield sse.stream_error(safe_truncate(err_text))
             stderr_thread.join(timeout=2)
 
         except FileNotFoundError:
-            yield "event: stream_error\ndata: opencode CLI 未找到\n\n"
+            yield sse.stream_error("opencode CLI 未找到")
         except subprocess.TimeoutExpired:
             if proc:
                 process_manager.terminate(proc, timeout=2)
-            yield "event: stream_error\ndata: 请求超时\n\n"
+            yield sse.stream_error("请求超时")
         except Exception as e:
-            yield f"event: stream_error\ndata: {str(e)}\n\n"
+            yield sse.stream_error(str(e))
         finally:
             if proc:
                 process_manager.unregister(proc)
@@ -1268,7 +1268,7 @@ def api_session_fork(session_id):
                 stdout_thread3.join(timeout=2)
             if stderr_thread:
                 stderr_thread.join(timeout=2)
-            yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or ''})}\n\n"
+            yield sse.done({"session_id": new_session_id or ""})
 
     return Response(
         stream_with_context(generate()),
