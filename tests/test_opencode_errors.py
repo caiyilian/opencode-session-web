@@ -1,6 +1,7 @@
 from services.opencode_errors import (
     ErrorKind,
     classify_error_text,
+    format_stream_error_message,
     is_known_error_text,
     known_error_keywords,
 )
@@ -55,6 +56,17 @@ def test_unknown_error_preserves_message():
     assert classified.message == "provider returned an unexpected payload"
     assert "技术细节" in classified.friendly_message
     assert not is_known_error_text(classified.message)
+
+
+def test_format_stream_error_message_adds_friendly_known_error():
+    message = format_stream_error_message("quota exceeded")
+
+    assert "模型额度或速率已受限" in message
+    assert "技术细节：quota exceeded" in message
+
+
+def test_format_stream_error_message_keeps_unknown_error_raw():
+    assert format_stream_error_message("unexpected provider payload") == "unexpected provider payload"
 
 
 def test_empty_error_text_is_none():
