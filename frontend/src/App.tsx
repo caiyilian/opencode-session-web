@@ -11,6 +11,7 @@ import "prismjs/components/prism-typescript";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  compareSessions,
   createNewSessionStream,
   getAvailableModels,
   getDirectories,
@@ -19,6 +20,8 @@ import {
   getSessions,
   getStats,
   type DirectorySummary,
+  type CompareResponse,
+  type CompareSession,
   type MessagePart,
   type SessionDetailResponse,
   type SessionMessage,
@@ -64,6 +67,12 @@ type DetailState =
   | { status: "loading"; sessionId: string }
   | { status: "ready"; sessionId: string; data: SessionDetailResponse }
   | { status: "error"; sessionId: string; message: string };
+
+type CompareState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; data: CompareResponse }
+  | { status: "error"; message: string };
 
 type StreamStatus = "connecting" | "streaming" | "done" | "error" | "stopped";
 
@@ -796,6 +805,8 @@ export default function App() {
               onSelectSession={(sessionId) => dispatch({ type: "selectSession", value: sessionId })}
             />
 
+            <ComparePanel sessions={data.sessions} />
+
             <section className="detail-panel timeline-panel">
               <div className="panel-heading">
                 <h3>Messages</h3>
@@ -984,6 +995,136 @@ function StatsRankList({
       ) : (
         <PanelStatus label={emptyLabel} />
       )}
+    </section>
+  );
+}
+
+function ComparePanel({ sessions }: { sessions: SessionSummary[] }) {
+  const defaultLeftId = sessions[0]?.id || "";
+  const defaultRightId = sessions.find((session) => session.id !== defaultLeftId)?.id || "";
+  const [leftId, setLeftId] = useState(defaultLeftId);
+  const [rightId, setRightId] = useState(defaultRightId);
+  const [compareState, setCompareState] = useState<CompareState>({ status: "idle" });
+
+  useEffect(() => {
+    const available = new Set(sessions.map((session) => session.id));
+    setLeftId((current) => (current && available.has(current) ? current : defaultLeftId));
+    setRightId((current) => (current && available.has(current) ? current : defaultRightId));
+  }, [defaultLeftId, defaultRightId, sessions]);
+
+  async function loadComparison() {
+    if (!leftId || !rightId) {
+      setCompareState({ status: "error", message: "Choose two sessions to compare" });
+      return;
+    }
+    if (leftId === rightId) {
+      setCompareState({ status: "error", message: "Choose two different sessions" });
+      return;
+    }
+
+    setCompareState({ status: "loading" });
+    try {
+      const data = await compareSessions(leftId, rightId);
+      setCompareState({ status: "ready", data });
+    } catch (error) {
+      setCompareState({ status: "error", message: errorText(error) });
+    }
+  }
+
+  function updateLeft(value: string) {
+    setLeftId(value);
+    setCompareState({ status: "idle" });
+  }
+
+  function updateRight(value: string) {
+    setRightId(value);
+    setCompareState({ status: "idle" });
+  }
+
+  return (
+    <section className="detail-panel compare-panel">
+      <div className="panel-heading">
+        <h3>Compare Sessions</h3>
+        <span>{sessions.length} loaded</span>
+      </div>
+      <div className="compare-controls">
+        <label>
+          <span>First session</span>
+          <select value={leftId} onChange={(event) => updateLeft(event.target.value)}>
+            <option value="">Select session</option>
+            {sessions.map((session) => (
+              <option key={`left-${session.id}`} value={session.id}>
+                {session.title || "Untitled session"}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Second session</span>
+          <select value={rightId} onChange={(event) => updateRight(event.target.value)}>
+            <option value="">Select session</option>
+            {sessions.map((session) => (
+              <option key={`right-${session.id}`} value={session.id}>
+                {session.title || "Untitled session"}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          disabled={compareState.status === "loading" || sessions.length < 2}
+          type="button"
+          onClick={loadComparison}
+        >
+          Compare
+        </button>
+      </div>
+      {compareState.status === "idle" && (
+        <PanelStatus label={sessions.length < 2 ? "Need two loaded sessions" : "Choose two sessions and compare"} />
+      )}
+      {compareState.status === "loading" && <PanelStatus label="Loading comparison" />}
+      {compareState.status === "error" && <PanelStatus label={compareState.message} tone="error" />}
+      {compareState.status === "ready" && <CompareResult data={compareState.data} />}
+    </section>
+  );
+}
+
+function CompareResult({ data }: { data: CompareResponse }) {
+  return (
+    <div className="compare-grid">
+      <CompareSessionColumn label="First" session={data.session1} />
+      <CompareSessionColumn label="Second" session={data.session2} />
+    </div>
+  );
+}
+
+function CompareSessionColumn({ label, session }: { label: string; session: CompareSession }) {
+  const totalTokens = session.tokens_input + session.tokens_output;
+
+  return (
+    <section className="compare-column">
+      <div className="compare-session-header">
+        <span>{label}</span>
+        <h4>{session.title || "Untitled session"}</h4>
+        <p>
+          {session.model || "N/A"} · {session.message_count} messages · {formatTokens(totalTokens)} tokens · $
+          {session.cost.toFixed(4)}
+        </p>
+      </div>
+      <div className="compare-message-list">
+        {session.messages.length > 0 ? (
+          session.messages.slice(0, 12).map((message) => (
+            <article className={`compare-message ${roleClassName(message.role)}`} key={message.id}>
+              <div>
+                <strong>{roleLabel(message.role)}</strong>
+                <span>{formatCompareTime(message.time)}</span>
+              </div>
+              <p>{message.content || "(empty)"}</p>
+            </article>
+          ))
+        ) : (
+          <PanelStatus label="No messages" />
+        )}
+      </div>
     </section>
   );
 }
@@ -1612,6 +1753,13 @@ function formatDurationMs(durationMs: number) {
   const minutes = Math.floor(normalized / 60_000);
   const seconds = Math.round((normalized % 60_000) / 1000);
   return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+function formatCompareTime(ms: number) {
+  if (!ms) return "";
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString();
 }
 
 function applyStreamEvent(

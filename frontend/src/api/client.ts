@@ -1,5 +1,6 @@
 import type {
   AvailableModelsResponse,
+  CompareResponse,
   DirectoriesResponse,
   MutationResponse,
   SessionDetailResponse,
@@ -70,6 +71,11 @@ export function getSessions(query: SessionsQuery = {}) {
 
 export function getSession(sessionId: string) {
   return apiRequest<SessionDetailResponse>(`/api/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export function compareSessions(id1: string, id2: string) {
+  const params = new URLSearchParams({ id1, id2 });
+  return apiRequest<CompareResponse>(`/api/sessions/compare?${params.toString()}`);
 }
 
 export function getSessionStreamUrl(sessionId: string, query: SessionStreamQuery) {

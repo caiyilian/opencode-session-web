@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   apiRequest,
+  compareSessions,
   createNewSessionStream,
   deleteSession,
   getSession,
@@ -56,6 +57,19 @@ describe("api client", () => {
       3,
       "/api/sessions/ses%2Fwith%20space/undo",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("builds compare query strings with encoded session ids", async () => {
+    mockJsonResponse({ session1: {}, session2: {} });
+
+    await compareSessions("ses/one", "ses two");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/sessions/compare?id1=ses%2Fone&id2=ses+two",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
     );
   });
 

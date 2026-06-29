@@ -132,6 +132,32 @@ export interface SessionDetailResponse {
   message_count: number;
 }
 
+export interface CompareMessage {
+  id: string;
+  role: string;
+  parts: unknown[];
+  content: string;
+  time: number;
+}
+
+export interface CompareSession {
+  id: string;
+  title: string;
+  model: string;
+  directory: string;
+  project: string;
+  messages: CompareMessage[];
+  message_count: number;
+  cost: number;
+  tokens_input: number;
+  tokens_output: number;
+}
+
+export interface CompareResponse {
+  session1: CompareSession;
+  session2: CompareSession;
+}
+
 export interface AvailableModelsResponse {
   models: string[];
 }

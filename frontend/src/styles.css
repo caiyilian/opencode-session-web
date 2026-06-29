@@ -645,6 +645,136 @@ select {
   background: #ffffff;
 }
 
+.compare-panel {
+  grid-column: 1 / -1;
+}
+
+.compare-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 14px;
+}
+
+.compare-controls label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: #52606f;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.compare-controls select {
+  width: 100%;
+  height: 34px;
+  border: 1px solid #cfd6e2;
+  border-radius: 6px;
+  padding: 0 9px;
+  color: #202124;
+  background: #ffffff;
+}
+
+.compare-controls button {
+  height: 34px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 14px;
+  color: #ffffff;
+  background: #2864c8;
+  cursor: pointer;
+}
+
+.compare-controls button:disabled {
+  color: #7a8495;
+  background: #e5e7eb;
+  cursor: default;
+}
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  border-top: 1px solid #e3e8f0;
+  padding: 14px;
+}
+
+.compare-column {
+  min-width: 0;
+  border: 1px solid #e3e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.compare-session-header {
+  display: grid;
+  gap: 4px;
+  border-bottom: 1px solid #e3e8f0;
+  padding: 10px;
+}
+
+.compare-session-header span {
+  color: #697385;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.compare-session-header h4,
+.compare-session-header p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.compare-session-header h4 {
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.compare-session-header p {
+  color: #697385;
+  font-size: 12px;
+}
+
+.compare-message-list {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.compare-message {
+  min-width: 0;
+  border: 1px solid #e3e8f0;
+  border-radius: 6px;
+  padding: 9px;
+  background: #ffffff;
+}
+
+.compare-message > div {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px 9px;
+  color: #697385;
+  font-size: 11px;
+}
+
+.compare-message strong {
+  color: #374151;
+}
+
+.compare-message p {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  color: #202124;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .panel-heading {
   display: flex;
   align-items: center;
@@ -1322,6 +1452,11 @@ select {
 
   .stats-metrics,
   .stats-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .compare-controls,
+  .compare-grid {
     grid-template-columns: 1fr;
   }
 
