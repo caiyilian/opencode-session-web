@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import {
   getAvailableModels,
   getDirectories,
@@ -9,23 +9,48 @@ import {
   type StatsResponse,
 } from "./api";
 
+const BLOCKED_PROVIDERS_STORAGE_KEY = "blockedProviders";
+
 interface DashboardData {
   stats: StatsResponse;
   directories: DirectorySummary[];
   sessions: SessionSummary[];
-  availableModelCount: number;
+  availableModels: string[];
   modelLoadError?: string;
 }
+
+interface BrowseState {
+  query: string;
+  selectedDirectory: string;
+  selectedModel: string;
+  selectedSessionId: string;
+  sidebarOpen: boolean;
+  hiddenProviders: string[];
+}
+
+type BrowseAction =
+  | { type: "setQuery"; value: string }
+  | { type: "selectDirectory"; value: string }
+  | { type: "selectModel"; value: string }
+  | { type: "selectSession"; value: string }
+  | { type: "toggleSidebar" }
+  | { type: "toggleProvider"; provider: string }
+  | { type: "clearFilters" };
 
 type LoadState =
   | { status: "loading" }
   | { status: "ready"; data: DashboardData }
   | { status: "error"; message: string };
 
+interface SessionFilters {
+  query: string;
+  directory: string;
+  model: string;
+}
+
 export default function App() {
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
-  const [query, setQuery] = useState("");
-  const [selectedSessionId, setSelectedSessionId] = useState<string>("");
+  const [browseState, dispatch] = useReducer(browseReducer, undefined, createInitialBrowseState);
 
   useEffect(() => {
     let mounted = true;
@@ -37,7 +62,7 @@ export default function App() {
           getDirectories(),
           getSessions({ limit: 200 }),
           getAvailableModels()
-            .then((response) => ({ models: response.models }))
+            .then((response) => ({ models: response.models, error: undefined }))
             .catch((error: unknown) => ({ models: [] as string[], error: errorText(error) })),
         ]);
 
@@ -48,8 +73,8 @@ export default function App() {
             stats,
             directories: directories.directories,
             sessions: sessions.sessions,
-            availableModelCount: models.models.length,
-            modelLoadError: "error" in models ? models.error : undefined,
+            availableModels: models.models,
+            modelLoadError: models.error,
           },
         });
       } catch (error) {
@@ -65,22 +90,49 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    writeHiddenProviders(browseState.hiddenProviders);
+  }, [browseState.hiddenProviders]);
+
   const data = loadState.status === "ready" ? loadState.data : null;
+  const filters = useMemo<SessionFilters>(
+    () => ({
+      query: browseState.query,
+      directory: browseState.selectedDirectory,
+      model: browseState.selectedModel,
+    }),
+    [browseState.query, browseState.selectedDirectory, browseState.selectedModel],
+  );
   const filteredSessions = useMemo(
-    () => filterSessions(data?.sessions ?? [], query),
-    [data?.sessions, query],
+    () => filterSessions(data?.sessions ?? [], filters),
+    [data?.sessions, filters],
   );
   const groupedSessions = useMemo(
     () => groupSessions(filteredSessions, data?.directories ?? []),
     [filteredSessions, data?.directories],
   );
+  const modelOptions = useMemo(
+    () => deriveModelOptions(data?.sessions ?? []),
+    [data?.sessions],
+  );
+  const visibleModelOptions = useMemo(
+    () => modelOptions.filter((model) => !isProviderHidden(model, browseState.hiddenProviders)),
+    [browseState.hiddenProviders, modelOptions],
+  );
+  const providerOptions = useMemo(
+    () => deriveProviderOptions([...(data?.availableModels ?? []), ...modelOptions]),
+    [data?.availableModels, modelOptions],
+  );
   const selectedSession =
-    data?.sessions.find((session) => session.id === selectedSessionId) ??
+    filteredSessions.find((session) => session.id === browseState.selectedSessionId) ??
     filteredSessions[0] ??
     null;
+  const activeFilterCount = [filters.query.trim(), filters.directory, filters.model].filter(
+    Boolean,
+  ).length;
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${browseState.sidebarOpen ? "" : "sidebar-collapsed"}`}>
       <aside className="sidebar-shell">
         <div className="brand-row">
           <span className="brand-mark" aria-hidden="true">
@@ -88,12 +140,81 @@ export default function App() {
           </span>
           <h1>OpenCode Sessions</h1>
         </div>
-        <input
-          className="search-input"
-          placeholder="Search sessions"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
+        <div className="filter-stack">
+          <input
+            className="search-input"
+            placeholder="Search sessions"
+            value={browseState.query}
+            onChange={(event) => dispatch({ type: "setQuery", value: event.target.value })}
+          />
+          <label className="filter-field">
+            <span>Directory</span>
+            <select
+              className="filter-select"
+              value={browseState.selectedDirectory}
+              onChange={(event) =>
+                dispatch({ type: "selectDirectory", value: event.target.value })
+              }
+            >
+              <option value="">All directories</option>
+              {data?.directories.map((directory) => (
+                <option key={directory.path} value={directory.path}>
+                  {directory.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="filter-field">
+            <span>Model</span>
+            <select
+              className="filter-select"
+              disabled={visibleModelOptions.length === 0}
+              value={browseState.selectedModel}
+              onChange={(event) => dispatch({ type: "selectModel", value: event.target.value })}
+            >
+              <option value="">All models</option>
+              {visibleModelOptions.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          </label>
+          {providerOptions.length > 0 && (
+            <div className="provider-filter" aria-label="Provider visibility">
+              <div className="provider-heading">
+                <span>Providers</span>
+                <span>{browseState.hiddenProviders.length} hidden</span>
+              </div>
+              <div className="provider-options">
+                {providerOptions.map((provider) => (
+                  <label
+                    className={`provider-option ${
+                      browseState.hiddenProviders.includes(provider) ? "muted" : ""
+                    }`}
+                    key={provider}
+                  >
+                    <input
+                      checked={browseState.hiddenProviders.includes(provider)}
+                      onChange={() => dispatch({ type: "toggleProvider", provider })}
+                      type="checkbox"
+                    />
+                    <span>{provider}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+          {activeFilterCount > 0 && (
+            <button
+              className="clear-filter-button"
+              type="button"
+              onClick={() => dispatch({ type: "clearFilters" })}
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
         <div className="sidebar-meta">
           {data ? `${filteredSessions.length} / ${data.sessions.length} sessions` : "Loading"}
         </div>
@@ -105,20 +226,33 @@ export default function App() {
           )}
           {groupedSessions.map((group) => (
             <section className="session-group" key={group.path}>
-              <div className="group-header">
+              <button
+                className={`group-header ${
+                  browseState.selectedDirectory === group.path ? "active" : ""
+                }`}
+                type="button"
+                onClick={() => dispatch({ type: "selectDirectory", value: group.path })}
+              >
                 <span>{group.name}</span>
                 <span>{group.sessions.length}</span>
-              </div>
+              </button>
               {group.sessions.map((session) => (
                 <button
                   className={`session-row ${session.id === selectedSession?.id ? "active" : ""}`}
                   key={session.id}
                   type="button"
-                  onClick={() => setSelectedSessionId(session.id)}
+                  onClick={() => dispatch({ type: "selectSession", value: session.id })}
                 >
                   <span className="session-title">{session.title || "Untitled session"}</span>
                   <span className="session-meta">
-                    {session.model || "N/A"} · {session.time_updated}
+                    <span>{session.model || "N/A"}</span>
+                    {isProviderHidden(session.model, browseState.hiddenProviders) && (
+                      <span className="state-pill muted">Hidden provider</span>
+                    )}
+                    {isModelUnavailable(session.model, data?.availableModels ?? []) && (
+                      <span className="state-pill warning">Unavailable</span>
+                    )}
+                    <span>{session.time_updated}</span>
                   </span>
                 </button>
               ))}
@@ -129,17 +263,28 @@ export default function App() {
 
       <section className="content-shell">
         <header className="content-header">
-          <div>
-            <p className="eyebrow">Session Browser</p>
-            <h2>{selectedSession?.title || "OpenCode Sessions"}</h2>
+          <div className="header-title-row">
+            <button
+              aria-expanded={browseState.sidebarOpen}
+              aria-label={browseState.sidebarOpen ? "Collapse sidebar" : "Open sidebar"}
+              className="sidebar-toggle"
+              type="button"
+              onClick={() => dispatch({ type: "toggleSidebar" })}
+            >
+              <span aria-hidden="true">{browseState.sidebarOpen ? "×" : "☰"}</span>
+            </button>
+            <div>
+              <p className="eyebrow">Session Browser</p>
+              <h2>{selectedSession?.title || "OpenCode Sessions"}</h2>
+            </div>
           </div>
           {data && (
             <div className="summary-strip" aria-label="Summary">
               <SummaryItem label="Sessions" value={formatNumber(data.stats.total_sessions)} />
-              <SummaryItem label="Projects" value={formatNumber(data.stats.total_projects)} />
+              <SummaryItem label="Shown" value={formatNumber(filteredSessions.length)} />
               <SummaryItem label="Input" value={formatTokens(data.stats.total_tokens_input)} />
               <SummaryItem label="Output" value={formatTokens(data.stats.total_tokens_output)} />
-              <SummaryItem label="Models" value={formatNumber(data.availableModelCount)} />
+              <SummaryItem label="Models" value={formatNumber(data.availableModels.length)} />
             </div>
           )}
         </header>
@@ -165,7 +310,15 @@ export default function App() {
                   </div>
                   <div>
                     <dt>Model</dt>
-                    <dd>{selectedSession.model || "N/A"}</dd>
+                    <dd className="value-stack">
+                      <span>{selectedSession.model || "N/A"}</span>
+                      {isProviderHidden(selectedSession.model, browseState.hiddenProviders) && (
+                        <span className="inline-status muted">Provider hidden locally</span>
+                      )}
+                      {isModelUnavailable(selectedSession.model, data.availableModels) && (
+                        <span className="inline-status warning">Model not in available list</span>
+                      )}
+                    </dd>
                   </div>
                   <div>
                     <dt>Updated</dt>
@@ -188,10 +341,17 @@ export default function App() {
               </div>
               <div className="directory-list">
                 {data.directories.slice(0, 8).map((directory) => (
-                  <div className="directory-row" key={directory.path}>
+                  <button
+                    className={`directory-row ${
+                      browseState.selectedDirectory === directory.path ? "active" : ""
+                    }`}
+                    key={directory.path}
+                    type="button"
+                    onClick={() => dispatch({ type: "selectDirectory", value: directory.path })}
+                  >
                     <span>{directory.name}</span>
                     <span>{directory.session_count}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
               {data.modelLoadError && (
@@ -203,6 +363,46 @@ export default function App() {
       </section>
     </main>
   );
+}
+
+function browseReducer(state: BrowseState, action: BrowseAction): BrowseState {
+  switch (action.type) {
+    case "setQuery":
+      return { ...state, query: action.value, selectedSessionId: "" };
+    case "selectDirectory":
+      return { ...state, selectedDirectory: action.value, selectedSessionId: "" };
+    case "selectModel":
+      return { ...state, selectedModel: action.value, selectedSessionId: "" };
+    case "selectSession":
+      return { ...state, selectedSessionId: action.value, sidebarOpen: false };
+    case "toggleSidebar":
+      return { ...state, sidebarOpen: !state.sidebarOpen };
+    case "toggleProvider": {
+      const hiddenProviders = state.hiddenProviders.includes(action.provider)
+        ? state.hiddenProviders.filter((provider) => provider !== action.provider)
+        : [...state.hiddenProviders, action.provider].sort();
+      const selectedModel = isProviderHidden(state.selectedModel, hiddenProviders)
+        ? ""
+        : state.selectedModel;
+
+      return { ...state, hiddenProviders, selectedModel, selectedSessionId: "" };
+    }
+    case "clearFilters":
+      return { ...state, query: "", selectedDirectory: "", selectedModel: "", selectedSessionId: "" };
+    default:
+      return state;
+  }
+}
+
+function createInitialBrowseState(): BrowseState {
+  return {
+    query: "",
+    selectedDirectory: "",
+    selectedModel: "",
+    selectedSessionId: "",
+    sidebarOpen: true,
+    hiddenProviders: readHiddenProviders(),
+  };
 }
 
 function StatusBlock({ label, tone = "muted" }: { label: string; tone?: "muted" | "error" }) {
@@ -222,14 +422,18 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
   );
 }
 
-function filterSessions(sessions: SessionSummary[], query: string) {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return sessions;
-  return sessions.filter((session) =>
-    [session.title, session.directory, session.project, session.model]
+function filterSessions(sessions: SessionSummary[], filters: SessionFilters) {
+  const normalized = filters.query.trim().toLowerCase();
+
+  return sessions.filter((session) => {
+    if (filters.directory && session.directory !== filters.directory) return false;
+    if (filters.model && session.model !== filters.model) return false;
+    if (!normalized) return true;
+
+    return [session.title, session.directory, session.project, session.model]
       .filter(Boolean)
-      .some((value) => value.toLowerCase().includes(normalized)),
-  );
+      .some((value) => value.toLowerCase().includes(normalized));
+  });
 }
 
 function groupSessions(sessions: SessionSummary[], directories: DirectorySummary[]) {
@@ -251,6 +455,57 @@ function groupSessions(sessions: SessionSummary[], directories: DirectorySummary
     const bTime = Math.max(...b.sessions.map((session) => session.time_updated_raw || 0));
     return bTime - aTime;
   });
+}
+
+function deriveModelOptions(sessions: SessionSummary[]) {
+  return Array.from(
+    new Set(sessions.map((session) => session.model).filter((model) => model.trim())),
+  ).sort((a, b) => a.localeCompare(b));
+}
+
+function deriveProviderOptions(models: string[]) {
+  return Array.from(new Set(models.map(providerForModel).filter(Boolean))).sort((a, b) =>
+    a.localeCompare(b),
+  );
+}
+
+function providerForModel(model: string) {
+  if (!model.trim() || model.trim().toUpperCase() === "N/A") return "";
+  const slashIndex = model.indexOf("/");
+  if (slashIndex <= 0) return "";
+  return model.slice(0, slashIndex + 1).trim();
+}
+
+function isProviderHidden(model: string, hiddenProviders: string[]) {
+  const provider = providerForModel(model);
+  return Boolean(provider && hiddenProviders.includes(provider));
+}
+
+function isModelUnavailable(model: string, availableModels: string[]) {
+  return Boolean(model && availableModels.length > 0 && !availableModels.includes(model));
+}
+
+function readHiddenProviders() {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(BLOCKED_PROVIDERS_STORAGE_KEY) || "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((provider): provider is string => typeof provider === "string")
+      : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function writeHiddenProviders(hiddenProviders: string[]) {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.localStorage.setItem(BLOCKED_PROVIDERS_STORAGE_KEY, JSON.stringify(hiddenProviders));
+  } catch (_) {
+    // Ignore storage failures so private browsing modes still render the shell.
+  }
 }
 
 function formatNumber(value: number) {
