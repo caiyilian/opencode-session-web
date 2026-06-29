@@ -113,6 +113,15 @@ def is_known_error_text(text: str | None) -> bool:
     return classified is not None and classified.kind is not ErrorKind.UNKNOWN
 
 
+def format_stream_error_message(text: str | None) -> str:
+    classified = classify_error_text(text)
+    if classified is None:
+        return ""
+    if classified.kind is ErrorKind.UNKNOWN:
+        return classified.message
+    return f"{classified.friendly_message}\n\n技术细节：{classified.message}"
+
+
 def known_error_keywords() -> tuple[str, ...]:
     return tuple(keyword for keywords in KEYWORDS_BY_KIND.values() for keyword in keywords)
 
