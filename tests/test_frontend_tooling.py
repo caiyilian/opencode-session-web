@@ -36,3 +36,15 @@ def test_frontend_api_client_scaffold_exports_core_helpers():
 
     assert 'export * from "./client"' in index_source
     assert 'export * from "./types"' in index_source
+
+
+def test_react_app_loads_core_api_data():
+    app_source = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+
+    for helper in ["getStats", "getDirectories", "getSessions", "getAvailableModels"]:
+        assert helper in app_source
+
+    assert 'status: "loading"' in app_source
+    assert 'status: "ready"' in app_source
+    assert 'status: "error"' in app_source
+    assert "OpenCode Sessions" in app_source
