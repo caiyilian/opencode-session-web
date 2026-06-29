@@ -26,6 +26,7 @@ from repositories.session_queries import (
     fetch_stats_overview,
     fetch_token_stats,
 )
+from services import sse
 from services.opencode_events import parse_part
 from services.process_manager import ProcessManager
 
@@ -608,22 +609,22 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                     if is_rate_limit:
                         terminate_stream_process()
                         err_text = "\n".join(recent_stderr[-5:])
-                        yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
+                        yield sse.stream_error(safe_truncate(err_text))
                         return
                     if not has_json_output:
                         terminate_stream_process()
                         err_text = "\n".join(recent_stderr[-5:])
-                        yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
+                        yield sse.stream_error(safe_truncate(err_text))
                         return
                 # 无任何输出超过 25 秒，终止（比前端 30 秒超时早）
                 if elapsed > 25:
                     terminate_stream_process()
                     err_msg = "模型无响应（可能已达到使用限制），请切换模型后重试"
                     logger.warning("killing opencode process after %ss of silence", elapsed)
-                    yield f"event: stream_error\ndata: {err_msg}\n\n"
+                    yield sse.stream_error(err_msg)
                     return
                 # 发送状态事件，防止前端 30 秒超时
-                yield f"event: status\ndata: waiting\n\n"
+                yield sse.status("waiting")
                 continue
             if line is None:
                 break
@@ -673,35 +674,34 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                 if err_text:
                     logger.warning("opencode stream error detected: %s", err_text[:200])
                     terminate_stream_process()
-                    yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
+                    yield sse.stream_error(safe_truncate(err_text))
                     return
 
                 if event_type == "text":
                     text = part.get("text", "")
                     if text:
                         safe_text = text.replace("\n", "\\n")
-                        yield f"event: text\ndata: {safe_text}\n\n"
+                        yield sse.event("text", safe_text)
                 elif event_type == "reasoning" or part.get("type") == "reasoning":
                     text = part.get("text", event.get("text", ""))
                     if text:
                         safe_text = text.replace("\n", "\\n")
-                        yield f"event: thinking\ndata: {safe_text}\n\n"
+                        yield sse.event("thinking", safe_text)
                 elif event_type == "tool_use" or part.get("type") == "tool":
                     tool_name = part.get("tool", event.get("tool", ""))
                     tool_input = part.get("input", "") or part.get("arguments", "") or ""
-                    info = json.dumps({"tool": tool_name, "input": str(tool_input)[:200]})
-                    yield f"event: tool_use\ndata: {info}\n\n"
+                    yield sse.json_event("tool_use", {"tool": tool_name, "input": str(tool_input)[:200]})
                 elif event_type == "tool_result" or part.get("type") == "tool_result":
                     tname = part.get("tool_name", "")
                     status = part.get("status", "done")
-                    yield f"event: tool_result\ndata: {json.dumps({'tool': tname, 'status': status})}\n\n"
+                    yield sse.json_event("tool_result", {"tool": tname, "status": status})
                 elif event_type == "step_start":
-                    yield "event: status\ndata: step_start\n\n"
+                    yield sse.status("step_start")
                 elif event_type == "step_finish":
                     reason = part.get("reason", "")
                     tokens = part.get("tokens", {})
                     if reason == "stop":
-                        yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'tokens': tokens, 'cost': part.get('cost', 0)})}\n\n"
+                        yield sse.done({"session_id": session_id, "tokens": tokens, "cost": part.get("cost", 0)})
                 elif event_type and event_type not in ("step_start", "step_finish"):
                     if event_type == "error":
                         err_data = event.get("error", {})
@@ -710,7 +710,7 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                         else:
                             err_msg = str(err_data)
                         if err_msg:
-                            yield f"event: stream_error\ndata: {safe_truncate(err_msg)}\n\n"
+                            yield sse.stream_error(safe_truncate(err_msg))
                     else:
                         logger.debug("unknown opencode event_type=%s data=%s", event_type, line[:200])
             except json.JSONDecodeError:
@@ -721,7 +721,7 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                     lower_line = non_json.lower()
                     if any(kw in lower_line for kw in RATE_LIMIT_KEYWORDS):
                         terminate_stream_process()
-                        yield f"event: stream_error\ndata: {safe_truncate(non_json)}\n\n"
+                        yield sse.stream_error(safe_truncate(non_json))
                         return
 
         proc.wait(timeout=timeout)
@@ -731,13 +731,13 @@ def run_opencode_stream(cmd, session_id, timeout=600):
             recent_stderr = list(stderr_lines[-10:])
         if recent_stderr:
             err_text = "\n".join(recent_stderr)
-            yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
+            yield sse.stream_error(safe_truncate(err_text))
 
     except GeneratorExit:
         process_manager.terminate(proc, timeout=5)
     except subprocess.TimeoutExpired:
         terminate_stream_process()
-        yield "event: stream_error\ndata: 请求超时\n\n"
+        yield sse.stream_error("请求超时")
     finally:
         process_manager.unregister(proc)
         stdout_thread.join(timeout=2)
@@ -795,13 +795,13 @@ def api_session_stream(session_id):
                 yield event
         except FileNotFoundError:
             had_error = True
-            yield f"event: stream_error\ndata: opencode CLI 未找到，请确认已安装 opencode\n\n"
+            yield sse.stream_error("opencode CLI 未找到，请确认已安装 opencode")
         except Exception as e:
             had_error = True
-            yield f"event: stream_error\ndata: {str(e)}\n\n"
+            yield sse.stream_error(str(e))
         finally:
             if not had_error:
-                yield f"event: done\ndata: {json.dumps({'session_id': session_id})}\n\n"
+                yield sse.done({"session_id": session_id})
 
     return Response(
         stream_with_context(generate()),
