@@ -1,6 +1,7 @@
 from typing import Any
 
 from services import sse
+from services.opencode_errors import format_stream_error_message
 from services.opencode_events import parse_event
 
 
@@ -42,7 +43,7 @@ def event_to_sse(
 ) -> str | None:
     error = extract_error_message(event)
     if error:
-        return sse.stream_error(truncate(error))
+        return sse.stream_error(truncate(format_stream_error_message(error)))
 
     part_payload = event.get("part") if isinstance(event.get("part"), dict) else {}
     part = parse_event(event)
