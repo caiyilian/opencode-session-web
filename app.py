@@ -28,6 +28,7 @@ from repositories.session_queries import (
 )
 from services import sse
 from services.opencode_events import parse_part
+from services.opencode_runner import event_to_sse
 from services.process_manager import ProcessManager
 
 app = Flask(__name__)
@@ -636,83 +637,17 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                 has_json_output = True
                 last_output_time = time.time()
                 event_type = event.get("type", "")
-                part = event.get("part", {})
 
-                # 通用错误检测：提取错误信息
-                def extract_error(ev):
-                    """从事件中提取错误信息，支持多种嵌套格式"""
-                    # 直接字段
-                    for key in ("error", "message"):
-                        val = ev.get(key)
-                        if isinstance(val, str) and val:
-                            return val
-                        if isinstance(val, dict):
-                            msg = val.get("message") or val.get("error") or ""
-                            if msg:
-                                return str(msg)
-                    # data 子对象
-                    data = ev.get("data")
-                    if isinstance(data, dict):
-                        for key in ("error", "message"):
-                            val = data.get(key)
-                            if isinstance(val, str) and val:
-                                return val
-                            if isinstance(val, dict):
-                                msg = val.get("message") or val.get("error") or ""
-                                if msg:
-                                    return str(msg)
-                    # name 字段为错误名（如 UnknownError, RateLimitError）
-                    name = ev.get("name", "")
-                    if isinstance(name, str) and "error" in name.lower():
-                        data_msg = ""
-                        if isinstance(data, dict):
-                            data_msg = data.get("message") or data.get("error") or ""
-                        return data_msg or name
-                    return ""
-
-                err_text = extract_error(event)
-                if err_text:
-                    logger.warning("opencode stream error detected: %s", err_text[:200])
-                    terminate_stream_process()
-                    yield sse.stream_error(safe_truncate(err_text))
-                    return
-
-                if event_type == "text":
-                    text = part.get("text", "")
-                    if text:
-                        safe_text = text.replace("\n", "\\n")
-                        yield sse.event("text", safe_text)
-                elif event_type == "reasoning" or part.get("type") == "reasoning":
-                    text = part.get("text", event.get("text", ""))
-                    if text:
-                        safe_text = text.replace("\n", "\\n")
-                        yield sse.event("thinking", safe_text)
-                elif event_type == "tool_use" or part.get("type") == "tool":
-                    tool_name = part.get("tool", event.get("tool", ""))
-                    tool_input = part.get("input", "") or part.get("arguments", "") or ""
-                    yield sse.json_event("tool_use", {"tool": tool_name, "input": str(tool_input)[:200]})
-                elif event_type == "tool_result" or part.get("type") == "tool_result":
-                    tname = part.get("tool_name", "")
-                    status = part.get("status", "done")
-                    yield sse.json_event("tool_result", {"tool": tname, "status": status})
-                elif event_type == "step_start":
-                    yield sse.status("step_start")
-                elif event_type == "step_finish":
-                    reason = part.get("reason", "")
-                    tokens = part.get("tokens", {})
-                    if reason == "stop":
-                        yield sse.done({"session_id": session_id, "tokens": tokens, "cost": part.get("cost", 0)})
+                sse_event = event_to_sse(event, session_id=session_id, done_on_stop_only=True)
+                if sse_event:
+                    if "stream_error" in sse_event:
+                        logger.warning("opencode stream error detected: %s", line[:200])
+                        terminate_stream_process()
+                        yield sse_event
+                        return
+                    yield sse_event
                 elif event_type and event_type not in ("step_start", "step_finish"):
-                    if event_type == "error":
-                        err_data = event.get("error", {})
-                        if isinstance(err_data, dict):
-                            err_msg = err_data.get("message", "") or err_data.get("data", {}).get("message", "")
-                        else:
-                            err_msg = str(err_data)
-                        if err_msg:
-                            yield sse.stream_error(safe_truncate(err_msg))
-                    else:
-                        logger.debug("unknown opencode event_type=%s data=%s", event_type, line[:200])
+                    logger.debug("unknown opencode event_type=%s data=%s", event_type, line[:200])
             except json.JSONDecodeError:
                 # 非 JSON 行 — 可能是错误信息（限流、模型不可用等）
                 non_json = line.strip()
