@@ -9,7 +9,6 @@ opencode 会话更新监控通知脚本
 脚本获取到 context_token 后才能推送通知。
 """
 
-import sqlite3
 import time
 import json
 import os
@@ -20,10 +19,14 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 from threading import Thread
 
+from db import connect_db
+from services.monitor_state import MonitorNotification, find_completed_sessions
+
 # ── 配置 ──────────────────────────────────────────────
 
 DB_PATH = os.path.expanduser("~/.local/share/opencode/opencode.db")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "3"))
+STABLE_WINDOW_MS = int(os.environ.get("MONITOR_STABLE_WINDOW_MS", "1500"))
 WECHAT_BASE_URL = "https://ilinkai.weixin.qq.com"
 CRED_FILE = Path.home() / ".opencode-monitor-cred.json"
 
@@ -154,21 +157,32 @@ def load_cred():
 # ── 会话监控 ──────────────────────────────────────────
 
 
+def get_completed_notifications(notified_part_ids=None, now_ms=None):
+    conn = connect_db(DB_PATH)
+    try:
+        return find_completed_sessions(
+            conn,
+            notified_part_ids=notified_part_ids or (),
+            stable_window_ms=STABLE_WINDOW_MS,
+            now_ms=now_ms,
+        )
+    finally:
+        conn.close()
+
+
+def notification_to_session(notification: MonitorNotification):
+    return {
+        "pid": notification.part_id,
+        "sid": notification.session_id,
+        "title": notification.title,
+        "directory": notification.directory,
+        "model": notification.model,
+    }
+
+
 def get_finished():
-    """返回所有 step-finish + reason=stop 的 part rowid 及会话信息"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        """SELECT p.rowid as pid, s.id as sid, s.title, s.directory, s.model
-           FROM session s
-           JOIN message m ON m.session_id = s.id
-           JOIN part p ON p.message_id = m.id
-           WHERE json_extract(p.data, '$.type') = 'step-finish'
-             AND json_extract(p.data, '$.reason') = 'stop'
-           ORDER BY m.time_created DESC"""
-    ).fetchall()
-    conn.close()
-    return rows
+    """返回状态机判定已完成的 part rowid 及会话信息。"""
+    return [notification_to_session(notification) for notification in get_completed_notifications()]
 
 
 def notify(cred, session):
@@ -223,6 +237,7 @@ def main():
     print("opencode \u4f1a\u8bdd\u76d1\u63a7")
     print(f"\u6570\u636e\u5e93: {DB_PATH}")
     print(f"\u8f6e\u8be2\u95f4\u9694: {POLL_INTERVAL}s")
+    print(f"\u7a33\u5b9a\u7a97\u53e3: {STABLE_WINDOW_MS}ms")
     print()
 
     global _log_file
@@ -241,25 +256,24 @@ def main():
     log("\u7b49\u5f85 context_token\u2026 \u8bf7\u5411\u4f60\u7684\u5fae\u4fe1\u673a\u5668\u4eba\u53d1\u9001\u4efb\u610f\u4e00\u6761\u6d88\u606f")
     print()
 
-    # 初始化：记录所有已有的 step-finish id，防止重启后重复通知
-    initial = get_finished()
-    notified = {r["pid"] for r in initial}
-    log(f"\u5df2\u8bb0\u5f55 {len(notified)} \u4e2a\u5df2\u5b8c\u6210\u7684 step-finish")
+    # 初始化：记录所有已有完成候选，防止重启后重复通知
+    initial = get_completed_notifications()
+    notified = {notification.part_id for notification in initial}
+    log(f"\u5df2\u8bb0\u5f55 {len(notified)} \u4e2a\u5df2\u5b8c\u6210\u7684\u4f1a\u8bdd\u901a\u77e5\u5019\u9009")
 
     while True:
         time.sleep(POLL_INTERVAL)
         try:
-            finished = get_finished()
+            finished = get_completed_notifications(notified_part_ids=notified)
         except Exception as e:
             log(f"\u6570\u636e\u5e93\u8bfb\u53d6\u5931\u8d25: {e}")
             continue
 
-        for s in finished:
-            pid = s["pid"]
-            if pid not in notified:
-                notified.add(pid)
-                log(f"\u65b0\u56de\u590d: {s['title'][:40]} ({s['directory']})")
-                notify(cred, s)
+        for notification in finished:
+            notified.add(notification.part_id)
+            session = notification_to_session(notification)
+            log(f"\u65b0\u56de\u590d: {session['title'][:40]} ({session['directory']})")
+            notify(cred, session)
 
 
 if __name__ == "__main__":
