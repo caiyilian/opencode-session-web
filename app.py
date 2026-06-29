@@ -15,12 +15,14 @@ from config import AppConfig
 from db import (
     connect_db,
     get_session_usage,
-    get_total_usage,
     has_table_column,
-    session_column_expr,
-    session_usage_query_parts,
 )
 from logging_config import configure_logging
+from repositories.session_queries import (
+    fetch_session_list,
+    fetch_stats_overview,
+    fetch_token_stats,
+)
 
 app = Flask(__name__)
 logger = configure_logging()
@@ -142,46 +144,24 @@ def extract_message_content(data: dict) -> str:
 def api_stats():
     """获取统计信息"""
     conn = get_db()
-    cursor = conn.cursor()
-
-    total_sessions = cursor.execute("SELECT COUNT(*) FROM session").fetchone()[0]
-    total_projects = cursor.execute("SELECT COUNT(DISTINCT directory) FROM session").fetchone()[0]
-    total_usage = get_total_usage(conn)
-
-    # Top 目录
-    dirs = cursor.execute(
-        "SELECT directory, COUNT(*) as cnt FROM session GROUP BY directory ORDER BY cnt DESC LIMIT 10"
-    ).fetchall()
-
-    # Top 模型（新版 schema 可能不再在 session 表保存 model）
-    if has_table_column(conn, "session", "model"):
-        models = cursor.execute(
-            "SELECT model, COUNT(*) as cnt FROM session WHERE model IS NOT NULL AND model != '' GROUP BY model ORDER BY cnt DESC LIMIT 10"
-        ).fetchall()
-    else:
-        models = []
-
-    # 最近活动
-    recent = cursor.execute(
-        "SELECT id, title, directory, time_updated FROM session ORDER BY time_updated DESC LIMIT 5"
-    ).fetchall()
-
+    stats = fetch_stats_overview(conn)
     conn.close()
+    total_usage = stats["total_usage"]
 
     return jsonify({
-        "total_sessions": total_sessions,
-        "total_projects": total_projects,
+        "total_sessions": stats["total_sessions"],
+        "total_projects": stats["total_projects"],
         "total_cost": round(total_usage["cost"], 6),
         "total_tokens_input": total_usage["tokens_input"],
         "total_tokens_output": total_usage["tokens_output"],
-        "top_directories": [{"path": r["directory"], "count": r["cnt"]} for r in dirs],
-        "top_models": [{"model": r["model"], "count": r["cnt"]} for r in models],
+        "top_directories": [{"path": r["directory"], "count": r["cnt"]} for r in stats["top_directories"]],
+        "top_models": [{"model": r["model"], "count": r["cnt"]} for r in stats["top_models"]],
         "recent_sessions": [{
             "id": r["id"],
             "title": r["title"],
             "directory": r["directory"],
             "time_updated": format_time(r["time_updated"]),
-        } for r in recent],
+        } for r in stats["recent_sessions"]],
     })
 
 
@@ -195,54 +175,14 @@ def api_sessions():
     offset = int(request.args.get("offset", 0))
 
     conn = get_db()
-    cursor = conn.cursor()
-
-    conditions = []
-    params = []
-
-    if q:
-        conditions.append("(s.title LIKE ? OR s.directory LIKE ? OR s.id LIKE ?)")
-        params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
-    if directory:
-        conditions.append("s.directory = ?")
-        params.append(directory)
-    if model:
-        if has_table_column(conn, "session", "model"):
-            conditions.append("s.model = ?")
-            params.append(model)
-        else:
-            conditions.append("0 = 1")
-
-    where = ""
-    if conditions:
-        where = "WHERE " + " AND ".join(conditions)
-
-    # 总数
-    total = cursor.execute(f"SELECT COUNT(*) FROM session s {where}", params).fetchone()[0]
-
-    usage_cte, usage_join, usage_expr = session_usage_query_parts(conn, "s")
-    model_expr = session_column_expr(conn, "model", "s", "NULL")
-    agent_expr = session_column_expr(conn, "agent", "s", "NULL")
-
-    # 列表
-    rows = cursor.execute(
-        f"""{usage_cte}
-            SELECT s.id, s.title, s.directory,
-                   {model_expr} AS model,
-                   {agent_expr} AS agent,
-                   s.time_created, s.time_updated,
-                   {usage_expr["cost"]} AS cost,
-                   {usage_expr["tokens_input"]} AS tokens_input,
-                   {usage_expr["tokens_output"]} AS tokens_output,
-                   (SELECT COUNT(*) FROM message m WHERE m.session_id = s.id) as msg_count
-            FROM session s
-            {usage_join}
-            {where}
-            ORDER BY s.time_updated DESC
-            LIMIT ? OFFSET ?""",
-        params + [limit, offset]
-    ).fetchall()
-
+    total, rows = fetch_session_list(
+        conn,
+        q=q,
+        directory=directory,
+        model=model,
+        limit=limit,
+        offset=offset,
+    )
     conn.close()
 
     sessions = []
@@ -1150,63 +1090,8 @@ def api_files():
 def api_stats_tokens():
     """Token 消耗统计（按天/模型/项目）"""
     conn = get_db()
-    cursor = conn.cursor()
-    usage_cte, usage_join, usage_expr = session_usage_query_parts(conn, "s")
-    model_expr = session_column_expr(conn, "model", "s", "'N/A'")
-
-    # 最近 30 天每日 Token
     thirty_days_ago = (int(time.time()) - 30 * 86400) * 1000
-    daily = cursor.execute(
-        f"""{usage_cte}
-           SELECT DATE(s.time_created / 1000, 'unixepoch') as day,
-                  SUM({usage_expr["tokens_input"]}) as inp,
-                  SUM({usage_expr["tokens_output"]}) as out
-           FROM session s
-           {usage_join}
-           WHERE s.time_created > ?
-           GROUP BY day
-           ORDER BY day""",
-        (thirty_days_ago,),
-    ).fetchall()
-
-    # 按模型汇总
-    model_where = "WHERE s.model IS NOT NULL AND s.model != ''" if has_table_column(conn, "session", "model") else ""
-    by_model = cursor.execute(
-        f"""{usage_cte}
-           SELECT {model_expr} AS model,
-                  SUM({usage_expr["tokens_input"]}) as inp,
-                  SUM({usage_expr["tokens_output"]}) as out,
-                  SUM({usage_expr["cost"]}) as cst
-           FROM session s
-           {usage_join}
-           {model_where}
-           GROUP BY {model_expr}
-           ORDER BY inp DESC
-           LIMIT 15""",
-    ).fetchall()
-
-    # 按项目汇总
-    by_project = cursor.execute(
-        f"""{usage_cte}
-           SELECT s.directory,
-                  SUM({usage_expr["tokens_input"]}) as inp,
-                  SUM({usage_expr["tokens_output"]}) as out,
-                  COUNT(*) as cnt
-           FROM session s
-           {usage_join}
-           GROUP BY s.directory
-           ORDER BY inp DESC
-           LIMIT 15""",
-    ).fetchall()
-
-    # 全量总消耗（不受 LIMIT 限制）
-    total_cost_all = cursor.execute(
-        f"""{usage_cte}
-           SELECT COALESCE(SUM({usage_expr["cost"]}), 0)
-           FROM session s
-           {usage_join}"""
-    ).fetchone()[0]
-
+    daily, by_model, by_project, total_cost_all = fetch_token_stats(conn, since_ms=thirty_days_ago)
     conn.close()
 
     return jsonify({
