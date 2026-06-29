@@ -1098,27 +1098,16 @@ def api_session_fork(session_id):
                     if not new_session_id and "sessionID" in ev:
                         new_session_id = ev["sessionID"]
                     ev_type = ev.get("type", "")
-                    part = ev.get("part", {})
-                    if ev_type == "text":
-                        txt = part.get("text", "")
-                        if txt:
-                            yield sse.event("text", txt.replace(chr(10), "\\n"))
-                    elif ev_type == "reasoning" or part.get("type") == "reasoning":
-                        txt = part.get("text", ev.get("text", ""))
-                        if txt:
-                            yield sse.event("thinking", txt.replace(chr(10), "\\n"))
-                    elif ev_type == "tool_use" or part.get("type") == "tool":
-                        tname = part.get("tool", ev.get("tool", ""))
-                        tinp = part.get("input", "") or part.get("arguments", "") or ""
-                        yield sse.json_event("tool_use", {"tool": tname, "input": str(tinp)[:200]})
-                    elif ev_type == "tool_result" or part.get("type") == "tool_result":
-                        tname = part.get("tool_name", "")
-                        yield sse.json_event("tool_result", {"tool": tname, "status": "done"})
-                    elif ev_type == "step_start":
-                        yield sse.status("step_start")
-                    elif ev_type == "step_finish":
-                        tokens = part.get("tokens", {})
-                        yield sse.done({"session_id": new_session_id or "", "tokens": tokens, "cost": part.get("cost", 0)})
+                    sse_event = event_to_sse(ev, session_id=new_session_id or "", done_on_stop_only=False)
+                    if sse_event:
+                        if "stream_error" in sse_event:
+                            logger.warning("fork-session stream error detected: %s", line[:200])
+                            terminate_fork_process()
+                            yield sse_event
+                            return
+                        yield sse_event
+                    elif ev_type and ev_type not in ("step_start", "step_finish"):
+                        logger.debug("fork-session unknown event_type=%s data=%s", ev_type, line[:200])
                 except json.JSONDecodeError:
                     non_json = line.strip()
                     if non_json and len(non_json) > 5:
