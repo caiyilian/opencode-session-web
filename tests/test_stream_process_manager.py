@@ -199,6 +199,31 @@ def test_fork_session_stream_uses_process_manager_for_normal_exit(monkeypatch, t
     assert manager.unregistered == [process]
 
 
+def test_fork_session_stream_terminates_process_manager_on_json_error(monkeypatch, tmp_path):
+    db_path = tmp_path / "opencode.db"
+    create_session_db(db_path, tmp_path)
+    process = FakeStreamProcess([
+        json.dumps({"error": {"message": "rate limited"}}) + "\n"
+    ])
+    manager = FakeStreamProcessManager(process)
+    monkeypatch.setattr(webapp, "process_manager", manager)
+    app = webapp.create_app({"TESTING": True, "OPENCODE_DB_PATH": str(db_path)})
+
+    with app.test_client() as client:
+        response = client.post(
+            "/api/sessions/ses_1/fork",
+            json={"message": "hello"},
+            buffered=True,
+        )
+
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert "event: stream_error" in body
+    assert "rate limited" in body
+    assert manager.terminated == [(process, 2)]
+    assert manager.unregistered == [process]
+
+
 def test_fork_session_stream_terminates_process_manager_on_non_json_rate_limit(monkeypatch, tmp_path):
     db_path = tmp_path / "opencode.db"
     create_session_db(db_path, tmp_path)
