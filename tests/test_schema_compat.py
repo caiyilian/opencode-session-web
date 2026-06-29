@@ -200,6 +200,14 @@ def test_session_detail_and_compare_include_usage(client):
     assert detail_payload["session"]["tokens_input"] > 0
     assert detail_payload["session"]["tokens_output"] > 0
     assert detail_payload["session"]["cost"] >= 0
+    parts = detail_payload["messages"][0]["parts"]
+    text_part = next(part for part in parts if part["type"] == "text")
+    step_finish_part = next(part for part in parts if part["type"] == "step-finish")
+    assert text_part == {"type": "text", "text": "hello from ses_old"}
+    assert step_finish_part["tokens"]["total"] == 15
+    assert step_finish_part["cost"] >= 0
+    assert step_finish_part["reason"] == "stop"
+    assert "[步骤完成]" in compare_payload["session1"]["messages"][0]["content"]
     total_compare_input = compare_payload["session1"]["tokens_input"] + compare_payload["session2"]["tokens_input"]
     total_compare_output = compare_payload["session1"]["tokens_output"] + compare_payload["session2"]["tokens_output"]
     total_compare_cost = compare_payload["session1"]["cost"] + compare_payload["session2"]["cost"]
