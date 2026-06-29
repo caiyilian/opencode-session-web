@@ -32,6 +32,12 @@ export interface SessionStreamQuery {
   model?: string;
 }
 
+export interface NewSessionStreamRequest {
+  directory: string;
+  message: string;
+  model?: string;
+}
+
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -68,6 +74,15 @@ export function getSession(sessionId: string) {
 
 export function getSessionStreamUrl(sessionId: string, query: SessionStreamQuery) {
   return `/api/sessions/${encodeURIComponent(sessionId)}/stream${queryString(query)}`;
+}
+
+export function createNewSessionStream(payload: NewSessionStreamRequest, signal?: AbortSignal) {
+  return fetch("/api/sessions/new", {
+    method: "POST",
+    headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
 }
 
 export function getAvailableModels() {
