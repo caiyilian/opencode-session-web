@@ -1053,7 +1053,9 @@ export default function App() {
                   ))}
                 </div>
                 {data.modelLoadError && (
-                  <p className="inline-warning">Models unavailable: {data.modelLoadError}</p>
+                  <p aria-live="polite" className="inline-warning" role="status">
+                    Models unavailable: {data.modelLoadError}
+                  </p>
                 )}
               </section>
             </div>
@@ -1131,11 +1133,29 @@ function createInitialBrowseState(): BrowseState {
 }
 
 function StatusBlock({ label, tone = "muted" }: { label: string; tone?: "muted" | "error" }) {
-  return <div className={`status-block ${tone}`}>{label}</div>;
+  return (
+    <div
+      aria-atomic="true"
+      aria-live={tone === "error" ? "assertive" : "polite"}
+      className={`status-block ${tone}`}
+      role={tone === "error" ? "alert" : "status"}
+    >
+      {label}
+    </div>
+  );
 }
 
 function PanelStatus({ label, tone = "muted" }: { label: string; tone?: "muted" | "error" }) {
-  return <div className={`panel-status ${tone}`}>{label}</div>;
+  return (
+    <div
+      aria-atomic="true"
+      aria-live={tone === "error" ? "assertive" : "polite"}
+      className={`panel-status ${tone}`}
+      role={tone === "error" ? "alert" : "status"}
+    >
+      {label}
+    </div>
+  );
 }
 
 function SummaryItem({ label, value }: { label: string; value: string }) {
@@ -1173,8 +1193,16 @@ function SessionActions({
           {state.status === "loading" && state.action === "delete" ? "Deleting" : "Delete session"}
         </button>
       </div>
-      {state.status === "success" && <p className="action-message success">{state.message}</p>}
-      {state.status === "error" && <p className="action-message error">{state.message}</p>}
+      {state.status === "success" && (
+        <p aria-live="polite" className="action-message success" role="status">
+          {state.message}
+        </p>
+      )}
+      {state.status === "error" && (
+        <p aria-live="assertive" className="action-message error" role="alert">
+          {state.message}
+        </p>
+      )}
     </div>
   );
 }
@@ -1493,8 +1521,16 @@ function SessionComposer({
         onChange={(event) => onTextChange(event.target.value)}
       />
       <div className="composer-actions">
-        {error && <span className="composer-error">{error}</span>}
-        {streamDraft?.error && <span className="composer-error">{streamDraft.error}</span>}
+        {error && (
+          <span aria-live="assertive" className="composer-error" role="alert">
+            {error}
+          </span>
+        )}
+        {streamDraft?.error && (
+          <span aria-live="assertive" className="composer-error" role="alert">
+            {streamDraft.error}
+          </span>
+        )}
         <div className="composer-buttons">
           {isStreaming && (
             <button className="secondary-button" type="button" onClick={onStop}>
@@ -1572,8 +1608,16 @@ function ForkSessionPanel({
           onChange={(event) => onMessageChange(event.target.value)}
         />
         <div className="composer-actions">
-          {error && <span className="composer-error">{error}</span>}
-          {draft?.error && <span className="composer-error">{draft.error}</span>}
+          {error && (
+            <span aria-live="assertive" className="composer-error" role="alert">
+              {error}
+            </span>
+          )}
+          {draft?.error && (
+            <span aria-live="assertive" className="composer-error" role="alert">
+              {draft.error}
+            </span>
+          )}
           <div className="composer-buttons">
             {active && (
               <button className="secondary-button" type="button" onClick={onStop}>
@@ -1682,8 +1726,16 @@ function NewSessionPanel({
           onChange={(event) => onMessageChange(event.target.value)}
         />
         <div className="composer-actions">
-          {error && <span className="composer-error">{error}</span>}
-          {draft?.error && <span className="composer-error">{draft.error}</span>}
+          {error && (
+            <span aria-live="assertive" className="composer-error" role="alert">
+              {error}
+            </span>
+          )}
+          {draft?.error && (
+            <span aria-live="assertive" className="composer-error" role="alert">
+              {draft.error}
+            </span>
+          )}
           <div className="composer-buttons">
             {active && (
               <button className="secondary-button" type="button" onClick={onStop}>
