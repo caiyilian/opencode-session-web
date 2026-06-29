@@ -1136,6 +1136,9 @@ def api_session_fork(session_id):
 
     def generate():
         new_session_id = None
+        proc = None
+        stderr_thread = None
+        stdout_thread3 = None
         try:
             cmd = [
                 "opencode", "run",
@@ -1148,11 +1151,15 @@ def api_session_fork(session_id):
                 cmd.insert(2, "-m")
                 cmd.insert(3, model)
 
-            proc = subprocess.Popen(
+            proc = process_manager.start(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace",
                 stdin=subprocess.DEVNULL,
             )
+
+            def terminate_fork_process():
+                if proc:
+                    process_manager.terminate(proc, timeout=2)
 
             stderr_lines = []
             stderr_lock3 = threading.Lock()
@@ -1187,14 +1194,12 @@ def api_session_fork(session_id):
                         combined = "\n".join(recent_stderr).lower()
                         is_rate_limit = any(kw in combined for kw in RATE_LIMIT_KW)
                         if is_rate_limit or not has_output:
-                            try: proc.kill()
-                            except: pass
+                            terminate_fork_process()
                             err_text = "\n".join(recent_stderr[-5:])
                             yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
                             return
                     if has_output and (time.time() - last_output_time > 120):
-                        try: proc.kill()
-                        except: pass
+                        terminate_fork_process()
                         yield "event: stream_error\ndata: 请求超时（120 秒无输出）\n\n"
                         return
                     continue
@@ -1235,8 +1240,7 @@ def api_session_fork(session_id):
                     if non_json and len(non_json) > 5:
                         lower_line = non_json.lower()
                         if any(kw in lower_line for kw in RATE_LIMIT_KW):
-                            try: proc.kill()
-                            except: pass
+                            terminate_fork_process()
                             yield f"event: stream_error\ndata: {safe_truncate(non_json)}\n\n"
                             return
 
@@ -1252,11 +1256,18 @@ def api_session_fork(session_id):
         except FileNotFoundError:
             yield "event: stream_error\ndata: opencode CLI 未找到\n\n"
         except subprocess.TimeoutExpired:
-            if proc: proc.kill()
+            if proc:
+                process_manager.terminate(proc, timeout=2)
             yield "event: stream_error\ndata: 请求超时\n\n"
         except Exception as e:
             yield f"event: stream_error\ndata: {str(e)}\n\n"
         finally:
+            if proc:
+                process_manager.unregister(proc)
+            if stdout_thread3:
+                stdout_thread3.join(timeout=2)
+            if stderr_thread:
+                stderr_thread.join(timeout=2)
             yield f"event: done\ndata: {json.dumps({'session_id': new_session_id or ''})}\n\n"
 
     return Response(
