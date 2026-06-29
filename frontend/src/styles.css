@@ -298,6 +298,56 @@ select {
   background: #eef2ff;
 }
 
+.tool-status {
+  flex: 0 0 auto;
+  gap: 5px;
+}
+
+.tool-status-icon {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.tool-status.success {
+  border-color: #bbf7d0;
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.tool-status.error {
+  border-color: #fecaca;
+  color: #991b1b;
+  background: #fef2f2;
+}
+
+.tool-status.running {
+  border-color: #fde68a;
+  color: #92400e;
+  background: #fffbeb;
+}
+
+.tool-status.hidden {
+  border-color: #c7d2fe;
+  color: #374151;
+  background: #eef2ff;
+}
+
+.tool-status.neutral {
+  border-color: #d9e0ea;
+  color: #52606f;
+  background: #ffffff;
+}
+
+.tool-duration {
+  margin-left: 2px;
+  border-left: 1px solid currentColor;
+  padding-left: 5px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
 .content-shell {
   min-width: 0;
   padding: 22px 26px;
