@@ -28,3 +28,9 @@ Thumbs.db
 # Project specific
 .codegraph/
 .atomcode/
+.omo/
+
+# Debug / temp files
+stderr.txt
+stdout.txt
+msg.txt
