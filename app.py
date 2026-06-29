@@ -26,6 +26,7 @@ from repositories.session_queries import (
     fetch_stats_overview,
     fetch_token_stats,
 )
+from services.opencode_events import parse_part
 
 app = Flask(__name__)
 logger = configure_logging()
@@ -261,13 +262,13 @@ def api_sessions_compare():
             m = msg_map[mid]
             texts = []
             for p in m["parts"]:
-                t = p.get("type", "")
-                if t == "text":
-                    texts.append(p.get("text", ""))
-                elif t == "tool":
-                    texts.append(f"[工具] {p.get('tool', '')}")
-                elif t == "step-finish":
-                    tokens_info = p.get("tokens", {})
+                part = parse_part(p)
+                if part.type == "text":
+                    texts.append(part.text)
+                elif part.type == "tool":
+                    texts.append(f"[工具] {part.tool}")
+                elif part.type == "step-finish":
+                    tokens_info = part.tokens
                     if tokens_info:
                         texts.append(f"[步骤完成] {tokens_info.get('total', 0)} tokens")
             content = "\n".join(texts) if texts else ""
@@ -358,15 +359,16 @@ def api_session_detail(session_id):
         m = msg_map[mid]
         parts_out = []
         for p in m["parts"]:
-            t = p.get("type", "")
+            part = parse_part(p)
+            t = part.type
             entry = {"type": t}
             if t == "text":
-                entry["text"] = p.get("text", "")
+                entry["text"] = part.text
             elif t == "reasoning":
-                entry["text"] = p.get("text", "")
+                entry["text"] = part.text
             elif t == "tool":
-                entry["tool"] = p.get("tool", "")
-                state = p.get("state", {})
+                entry["tool"] = part.tool
+                state = part.state
                 sinp = state.get("input", {})
                 if isinstance(sinp, dict):
                     # bash: {command, description}; glob: {pattern}; edit: {file_path, ...}
@@ -380,16 +382,16 @@ def api_session_detail(session_id):
                 entry["output"] = state.get("output", "")[:2000]
                 entry["is_hidden"] = state.get("metadata", {}).get("truncated", False) if isinstance(state.get("metadata"), dict) else False
             elif t == "tool_result":
-                entry["tool_name"] = p.get("tool_name", "")
-                entry["content"] = p.get("content", "")
+                entry["tool_name"] = part.tool
+                entry["content"] = part.text
                 entry["status"] = p.get("status", "success")
                 entry["is_hidden"] = p.get("is_hidden", False)
             elif t == "step-start":
                 pass
             elif t == "step-finish":
-                entry["tokens"] = p.get("tokens", {})
-                entry["cost"] = p.get("cost", 0)
-                entry["reason"] = p.get("reason", "")
+                entry["tokens"] = part.tokens
+                entry["cost"] = part.cost
+                entry["reason"] = part.reason
             parts_out.append(entry)
 
         msg_list.append({
