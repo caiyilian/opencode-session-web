@@ -41,10 +41,18 @@ def test_event_to_sse_step_finish_stop():
 
 
 def test_event_to_sse_error_shapes():
-    assert event_to_sse({"error": {"message": "quota"}}) == "event: stream_error\ndata: quota\n\n"
-    assert event_to_sse({"data": {"error": {"message": "bad model"}}}) == (
-        "event: stream_error\ndata: bad model\n\n"
-    )
+    rate_limit = event_to_sse({"error": {"message": "quota"}})
+    assert rate_limit is not None
+    assert "event: stream_error" in rate_limit
+    assert "模型额度或速率已受限" in rate_limit
+    assert "quota" in rate_limit
+
+    model_error = event_to_sse({"data": {"error": {"message": "model not found: bad model"}}})
+    assert model_error is not None
+    assert "event: stream_error" in model_error
+    assert "模型不可用" in model_error
+    assert "model not found: bad model" in model_error
+
     assert extract_error_message({"name": "UnknownError", "data": {"message": "boom"}}) == "boom"
 
 
