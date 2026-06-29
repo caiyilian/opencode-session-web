@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useReducer, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   getAvailableModels,
   getDirectories,
@@ -517,7 +519,7 @@ function MessageCard({ message, index }: { message: SessionMessage; index: numbe
 
 function MessagePartView({ part, index }: { part: MessagePart; index: number }) {
   if (part.type === "text") {
-    return <div className="message-text">{stringValue(part.text)}</div>;
+    return <MarkdownContent source={stringValue(part.text)} />;
   }
 
   if (part.type === "reasoning") {
@@ -599,6 +601,16 @@ function MessagePartView({ part, index }: { part: MessagePart; index: number }) 
         {stringifyValue(part)}
       </code>
     </pre>
+  );
+}
+
+function MarkdownContent({ source }: { source: string }) {
+  if (!source.trim()) return <div className="message-text muted">(empty)</div>;
+
+  return (
+    <div className="markdown-content">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{source}</ReactMarkdown>
+    </div>
   );
 }
 
