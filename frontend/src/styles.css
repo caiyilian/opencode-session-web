@@ -1582,17 +1582,36 @@ textarea:focus-visible {
     border-bottom: 1px solid #d8dee8;
   }
 
+  .brand-row {
+    padding: 14px 14px 10px;
+  }
+
+  .filter-stack {
+    gap: 8px;
+    padding: 0 14px 10px;
+  }
+
+  .sidebar-meta {
+    padding: 0 14px 8px;
+  }
+
   .session-list {
-    max-height: 360px;
+    max-height: min(48svh, 420px);
+    padding: 0 8px 12px;
   }
 
   .content-shell {
-    padding: 18px;
+    padding: 14px;
   }
 
   .content-header,
   .workspace-grid {
     display: block;
+  }
+
+  .content-header {
+    gap: 12px;
+    padding-bottom: 14px;
   }
 
   .workspace-grid > * + * {
@@ -1602,16 +1621,34 @@ textarea:focus-visible {
   .header-title-row {
     align-items: flex-start;
     flex-wrap: wrap;
+    gap: 10px;
   }
 
   .sidebar-toggle {
     display: inline-flex;
   }
 
+  .content-header h2 {
+    font-size: 21px;
+  }
+
+  .new-session-button {
+    height: 32px;
+    padding: 0 10px;
+  }
+
   .summary-strip {
+    display: flex;
     min-width: 0;
-    margin-top: 14px;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 12px;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .summary-item {
+    min-width: 108px;
+    padding: 7px 8px;
   }
 
   .composer-toolbar,
@@ -1628,6 +1665,21 @@ textarea:focus-visible {
     max-width: 100%;
   }
 
+  .composer-panel {
+    gap: 9px;
+    padding: 12px;
+  }
+
+  .composer-panel textarea {
+    min-height: 84px;
+    max-height: 28svh;
+  }
+
+  .composer-buttons {
+    margin-left: 0;
+    justify-content: flex-end;
+  }
+
   .stats-metrics,
   .stats-columns {
     grid-template-columns: 1fr;
@@ -1639,8 +1691,29 @@ textarea:focus-visible {
   }
 
   .message-timeline {
-    max-height: none;
-    overflow: visible;
+    min-height: 210px;
+    max-height: min(32svh, 300px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 12px;
+  }
+
+  .message-card {
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .message-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 7px;
+    font-size: 11px;
+  }
+
+  .detail-list div {
+    grid-template-columns: 86px minmax(0, 1fr);
+    gap: 10px;
   }
 
   .detail-panel + .detail-panel {
