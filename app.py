@@ -861,66 +861,15 @@ def api_session_new():
                         new_session_id = ev["sessionID"]
 
                     ev_type = ev.get("type", "")
-                    part = ev.get("part", {})
-
-                    # 通用错误检测
-                    def extract_error_new(e):
-                        for key in ("error", "message"):
-                            val = e.get(key)
-                            if isinstance(val, str) and val:
-                                return val
-                            if isinstance(val, dict):
-                                msg = val.get("message") or val.get("error") or ""
-                                if msg:
-                                    return str(msg)
-                        d = e.get("data")
-                        if isinstance(d, dict):
-                            for key in ("error", "message"):
-                                val = d.get(key)
-                                if isinstance(val, str) and val:
-                                    return val
-                                if isinstance(val, dict):
-                                    msg = val.get("message") or val.get("error") or ""
-                                    if msg:
-                                        return str(msg)
-                        name = e.get("name", "")
-                        if isinstance(name, str) and "error" in name.lower():
-                            dm = ""
-                            if isinstance(d, dict):
-                                dm = d.get("message") or d.get("error") or ""
-                            return dm or name
-                        return ""
-
-                    err_text = extract_error_new(ev)
-                    if err_text:
-                        logger.warning("new-session stream error detected: %s", err_text[:200])
-                        terminate_new_session_process()
-                        had_error = True
-                        yield sse.stream_error(safe_truncate(err_text))
-                        return
-
-                    if ev_type == "text":
-                        txt = part.get("text", "")
-                        if txt:
-                            safe = txt.replace("\n", "\\n")
-                            yield sse.event("text", safe)
-                    elif ev_type == "reasoning" or part.get("type") == "reasoning":
-                        txt = part.get("text", ev.get("text", ""))
-                        if txt:
-                            safe = txt.replace("\n", "\\n")
-                            yield sse.event("thinking", safe)
-                    elif ev_type == "tool_use" or part.get("type") == "tool":
-                        tname = part.get("tool", ev.get("tool", ""))
-                        tinp = part.get("input", "") or part.get("arguments", "") or ""
-                        yield sse.json_event("tool_use", {"tool": tname, "input": str(tinp)[:200]})
-                    elif ev_type == "tool_result" or part.get("type") == "tool_result":
-                        tname = part.get("tool_name", "")
-                        yield sse.json_event("tool_result", {"tool": tname, "status": "done"})
-                    elif ev_type == "step_start":
-                        yield sse.status("step_start")
-                    elif ev_type == "step_finish":
-                        tokens = part.get("tokens", {})
-                        yield sse.done({"session_id": new_session_id or "", "tokens": tokens, "cost": part.get("cost", 0)})
+                    sse_event = event_to_sse(ev, session_id=new_session_id or "", done_on_stop_only=False)
+                    if sse_event:
+                        if "stream_error" in sse_event:
+                            logger.warning("new-session stream error detected: %s", line[:200])
+                            terminate_new_session_process()
+                            had_error = True
+                            yield sse_event
+                            return
+                        yield sse_event
                     elif ev_type and ev_type not in ("step_start", "step_finish"):
                         logger.debug("new-session unknown event_type=%s data=%s", ev_type, line[:200])
                 except json.JSONDecodeError:
