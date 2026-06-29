@@ -13,6 +13,8 @@ def test_frontend_package_exposes_vite_build_script():
     assert "react-dom" in package["dependencies"]
     assert "vite" in package["dependencies"]
     assert "typescript" in package["dependencies"]
+    assert "react-markdown" in package["dependencies"]
+    assert "remark-gfm" in package["dependencies"]
     assert "vitest" in package["devDependencies"]
 
 
@@ -53,4 +55,6 @@ def test_react_app_loads_core_api_data():
     assert "OpenCode Sessions" in app_source
     assert "Collapse sidebar" in app_source
     assert "MessageTimeline" in app_source
+    assert "ReactMarkdown" in app_source
+    assert "remarkGfm" in app_source
     assert "step-finish" in app_source
