@@ -22,6 +22,14 @@ def test_frontend_package_exposes_vite_build_script():
     assert "vitest" in package["devDependencies"]
 
 
+def test_local_test_runner_covers_backend_frontend_and_e2e():
+    runner = Path("scripts/run_all_tests.py").read_text(encoding="utf-8")
+
+    assert "pytest" in runner
+    assert '"test"' in runner
+    assert "test:e2e" in runner
+
+
 def test_frontend_api_client_scaffold_exports_core_helpers():
     client_source = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     types_source = Path("frontend/src/api/types.ts").read_text(encoding="utf-8")
