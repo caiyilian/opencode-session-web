@@ -952,106 +952,6 @@ export default function App() {
         )}
         {data && (
           <div className="workspace-grid">
-            <section className="detail-panel">
-              <div className="panel-heading">
-                <h3>Session</h3>
-                <span>{selectedSession?.message_count ?? 0} messages</span>
-              </div>
-              {selectedSession ? (
-                <>
-                  <dl className="detail-list">
-                    <div>
-                      <dt>Project</dt>
-                      <dd>{selectedSession.project}</dd>
-                    </div>
-                    <div>
-                      <dt>Directory</dt>
-                      <dd>{selectedSession.directory}</dd>
-                    </div>
-                    <div>
-                      <dt>Model</dt>
-                      <dd className="value-stack">
-                        <span>{selectedSession.model || "N/A"}</span>
-                        {isProviderHidden(selectedSession.model, browseState.hiddenProviders) && (
-                          <span className="inline-status muted">Provider hidden locally</span>
-                        )}
-                        {isModelUnavailable(selectedSession.model, data.availableModels) && (
-                          <span className="inline-status warning">Model not in available list</span>
-                        )}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Updated</dt>
-                      <dd>{selectedSession.time_updated}</dd>
-                    </div>
-                    <div>
-                      <dt>Cost</dt>
-                      <dd>${selectedSession.cost.toFixed(6)}</dd>
-                    </div>
-                  </dl>
-                  <SessionActions
-                    state={sessionActionState}
-                    onDelete={deleteSelectedSession}
-                    onFork={openForkSession}
-                    onUndo={undoSelectedSession}
-                  />
-                </>
-              ) : (
-                <PanelStatus label="No session selected" />
-              )}
-            </section>
-
-            <section className="detail-panel">
-              <div className="panel-heading">
-                <h3>Recent Projects</h3>
-                <span>{data.directories.length}</span>
-              </div>
-              <div className="directory-list">
-                {data.directories.slice(0, 8).map((directory) => (
-                  <button
-                    className={`directory-row ${
-                      browseState.selectedDirectory === directory.path ? "active" : ""
-                    }`}
-                    key={directory.path}
-                    type="button"
-                    onClick={() => dispatch({ type: "selectDirectory", value: directory.path })}
-                  >
-                    <span>{directory.name}</span>
-                    <span>{directory.session_count}</span>
-                  </button>
-                ))}
-              </div>
-              {data.modelLoadError && (
-                <p className="inline-warning">Models unavailable: {data.modelLoadError}</p>
-              )}
-            </section>
-
-            {forkOpen && selectedSession && (
-              <ForkSessionPanel
-                draft={forkDraft}
-                error={forkError}
-                message={forkMessage}
-                model={forkModel}
-                modelOptions={composerModelOptions}
-                session={selectedSession}
-                onClose={closeForkSession}
-                onMessageChange={(value) => {
-                  setForkMessage(value);
-                  if (forkError) setForkError("");
-                }}
-                onModelChange={setForkModel}
-                onStop={stopForkSession}
-                onSubmit={submitForkSession}
-              />
-            )}
-
-            <StatsPanel
-              stats={data.stats}
-              onSelectSession={(sessionId) => dispatch({ type: "selectSession", value: sessionId })}
-            />
-
-            <ComparePanel sessions={data.sessions} />
-
             <section className="detail-panel timeline-panel">
               <div className="panel-heading">
                 <h3>Messages</h3>
@@ -1081,6 +981,108 @@ export default function App() {
                 }}
               />
             </section>
+
+            <div className="overview-column" aria-label="Session overview">
+              <section className="detail-panel">
+                <div className="panel-heading">
+                  <h3>Session</h3>
+                  <span>{selectedSession?.message_count ?? 0} messages</span>
+                </div>
+                {selectedSession ? (
+                  <>
+                    <dl className="detail-list">
+                      <div>
+                        <dt>Project</dt>
+                        <dd>{selectedSession.project}</dd>
+                      </div>
+                      <div>
+                        <dt>Directory</dt>
+                        <dd>{selectedSession.directory}</dd>
+                      </div>
+                      <div>
+                        <dt>Model</dt>
+                        <dd className="value-stack">
+                          <span>{selectedSession.model || "N/A"}</span>
+                          {isProviderHidden(selectedSession.model, browseState.hiddenProviders) && (
+                            <span className="inline-status muted">Provider hidden locally</span>
+                          )}
+                          {isModelUnavailable(selectedSession.model, data.availableModels) && (
+                            <span className="inline-status warning">Model not in available list</span>
+                          )}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Updated</dt>
+                        <dd>{selectedSession.time_updated}</dd>
+                      </div>
+                      <div>
+                        <dt>Cost</dt>
+                        <dd>${selectedSession.cost.toFixed(6)}</dd>
+                      </div>
+                    </dl>
+                    <SessionActions
+                      state={sessionActionState}
+                      onDelete={deleteSelectedSession}
+                      onFork={openForkSession}
+                      onUndo={undoSelectedSession}
+                    />
+                  </>
+                ) : (
+                  <PanelStatus label="No session selected" />
+                )}
+              </section>
+
+              <section className="detail-panel">
+                <div className="panel-heading">
+                  <h3>Recent Projects</h3>
+                  <span>{data.directories.length}</span>
+                </div>
+                <div className="directory-list">
+                  {data.directories.slice(0, 8).map((directory) => (
+                    <button
+                      className={`directory-row ${
+                        browseState.selectedDirectory === directory.path ? "active" : ""
+                      }`}
+                      key={directory.path}
+                      type="button"
+                      onClick={() => dispatch({ type: "selectDirectory", value: directory.path })}
+                    >
+                      <span>{directory.name}</span>
+                      <span>{directory.session_count}</span>
+                    </button>
+                  ))}
+                </div>
+                {data.modelLoadError && (
+                  <p className="inline-warning">Models unavailable: {data.modelLoadError}</p>
+                )}
+              </section>
+            </div>
+
+            {forkOpen && selectedSession && (
+              <ForkSessionPanel
+                draft={forkDraft}
+                error={forkError}
+                message={forkMessage}
+                model={forkModel}
+                modelOptions={composerModelOptions}
+                session={selectedSession}
+                onClose={closeForkSession}
+                onMessageChange={(value) => {
+                  setForkMessage(value);
+                  if (forkError) setForkError("");
+                }}
+                onModelChange={setForkModel}
+                onStop={stopForkSession}
+                onSubmit={submitForkSession}
+              />
+            )}
+
+            <StatsPanel
+              stats={data.stats}
+              onSelectSession={(sessionId) => dispatch({ type: "selectSession", value: sessionId })}
+            />
+
+            <ComparePanel sessions={data.sessions} />
           </div>
         )}
       </section>
