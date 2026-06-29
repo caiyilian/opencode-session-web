@@ -6,3 +6,12 @@ requires-python = ">=3.12"
 dependencies = [
     "flask>=3.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--basetemp=.pytest-tmp"
