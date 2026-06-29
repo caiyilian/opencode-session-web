@@ -956,20 +956,25 @@ textarea:focus-visible {
 
 .action-message {
   margin: 0;
+  border: 1px solid #d9e0ea;
+  border-left-width: 3px;
   border-radius: 6px;
   padding: 8px 9px;
+  overflow-wrap: anywhere;
   font-size: 12px;
   line-height: 1.4;
 }
 
 .action-message.success {
-  border: 1px solid #bbf7d0;
+  border-color: #bbf7d0;
+  border-left-color: #16a34a;
   color: #166534;
   background: #f0fdf4;
 }
 
 .action-message.error {
-  border: 1px solid #fed7aa;
+  border-color: #fed7aa;
+  border-left-color: #f97316;
   color: #9a3412;
   background: #fff7ed;
 }
@@ -1012,20 +1017,29 @@ textarea:focus-visible {
 .status-block,
 .panel-status {
   border: 1px solid #d9e0ea;
+  border-left-width: 3px;
   border-radius: 6px;
   padding: 16px;
+  overflow-wrap: anywhere;
   color: #697385;
   background: #f8fafc;
   font-size: 13px;
   line-height: 1.45;
 }
 
+.status-block.muted,
+.panel-status.muted {
+  border-left-color: #9fbbe8;
+}
+
 .status-block {
   margin: 8px;
+  min-height: 46px;
 }
 
 .panel-status {
   margin-top: 20px;
+  min-height: 82px;
 }
 
 .timeline-panel .panel-status {
@@ -1130,10 +1144,18 @@ textarea:focus-visible {
 }
 
 .composer-error {
+  display: inline-flex;
   min-width: 0;
+  max-width: 100%;
+  border: 1px solid #fed7aa;
+  border-left: 3px solid #f97316;
+  border-radius: 6px;
+  padding: 6px 8px;
   overflow-wrap: anywhere;
   color: #9a3412;
+  background: #fff7ed;
   font-size: 12px;
+  line-height: 1.4;
 }
 
 .composer-buttons {
@@ -1553,6 +1575,8 @@ textarea:focus-visible {
 .status-block.error,
 .panel-status.error,
 .inline-warning {
+  border-color: #fed7aa;
+  border-left-color: #f97316;
   color: #9a3412;
   background: #fff7ed;
 }
@@ -1560,9 +1584,12 @@ textarea:focus-visible {
 .inline-warning {
   margin: 0 14px 14px;
   border: 1px solid #fed7aa;
+  border-left-width: 3px;
   border-radius: 6px;
   padding: 9px 10px;
+  overflow-wrap: anywhere;
   font-size: 12px;
+  line-height: 1.45;
 }
 
 @media (max-width: 980px) {
