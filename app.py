@@ -27,6 +27,7 @@ from repositories.session_queries import (
     fetch_token_stats,
 )
 from services import sse
+from services.opencode_errors import format_stream_error_message, is_known_error_text
 from services.opencode_events import parse_part
 from services.opencode_runner import event_to_sse
 from services.process_manager import ProcessManager
@@ -580,8 +581,6 @@ def run_opencode_stream(cmd, session_id, timeout=600):
     stdout_thread.start()
 
     has_json_output = False
-    RATE_LIMIT_KEYWORDS = ["rate limit", "quota", "exceeded", "too many", "retry-after",
-                           "free usage", "subscribe", "retrying in", "429"]
     last_output_time = time.time()
     loop_count = 0
     try:
@@ -604,18 +603,18 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                     proc.poll() is None,
                 )
                 if recent_stderr:
-                    combined = "\n".join(recent_stderr).lower()
-                    is_rate_limit = any(kw in combined for kw in RATE_LIMIT_KEYWORDS)
+                    combined = "\n".join(recent_stderr)
+                    has_known_error = is_known_error_text(combined)
                     logger.debug("recent stderr: %s", recent_stderr[-1][:200])
-                    if is_rate_limit:
+                    if has_known_error:
                         terminate_stream_process()
                         err_text = "\n".join(recent_stderr[-5:])
-                        yield sse.stream_error(safe_truncate(err_text))
+                        yield sse.stream_error(safe_truncate(format_stream_error_message(err_text)))
                         return
                     if not has_json_output:
                         terminate_stream_process()
                         err_text = "\n".join(recent_stderr[-5:])
-                        yield sse.stream_error(safe_truncate(err_text))
+                        yield sse.stream_error(safe_truncate(format_stream_error_message(err_text)))
                         return
                 # 无任何输出超过 25 秒，终止（比前端 30 秒超时早）
                 if elapsed > 25:
@@ -653,10 +652,9 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                 non_json = line.strip()
                 logger.debug("non-json opencode stdout: %s", non_json[:200])
                 if non_json and len(non_json) > 5:
-                    lower_line = non_json.lower()
-                    if any(kw in lower_line for kw in RATE_LIMIT_KEYWORDS):
+                    if is_known_error_text(non_json):
                         terminate_stream_process()
-                        yield sse.stream_error(safe_truncate(non_json))
+                        yield sse.stream_error(safe_truncate(format_stream_error_message(non_json)))
                         return
 
         proc.wait(timeout=timeout)
@@ -666,7 +664,7 @@ def run_opencode_stream(cmd, session_id, timeout=600):
             recent_stderr = list(stderr_lines[-10:])
         if recent_stderr:
             err_text = "\n".join(recent_stderr)
-            yield sse.stream_error(safe_truncate(err_text))
+            yield sse.stream_error(safe_truncate(format_stream_error_message(err_text)))
 
     except GeneratorExit:
         process_manager.terminate(proc, timeout=5)
