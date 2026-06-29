@@ -27,9 +27,12 @@ from repositories.session_queries import (
     fetch_token_stats,
 )
 from services.opencode_events import parse_part
+from services.process_manager import ProcessManager
 
 app = Flask(__name__)
 logger = configure_logging()
+process_manager = ProcessManager()
+process_manager.register_atexit()
 
 # ── 数据库路径 ──────────────────────────────────────────────
 
@@ -539,7 +542,7 @@ def run_opencode_stream(cmd, session_id, timeout=600):
     - 进程异常退出时发送 stderr 内容
     """
     logger.debug("run_opencode_stream called cmd=%s", cmd)
-    proc = subprocess.Popen(
+    proc = process_manager.start(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,  # stderr 独立管道，Node.js 会立即刷新
@@ -549,6 +552,9 @@ def run_opencode_stream(cmd, session_id, timeout=600):
         stdin=subprocess.DEVNULL,
     )
     logger.debug("opencode process started pid=%s", proc.pid)
+
+    def terminate_stream_process():
+        process_manager.terminate(proc, timeout=2)
 
     # 收集 stderr 的线程（stderr 无缓冲，Node 的 console.error 立即到达）
     stderr_lines = []
@@ -600,21 +606,18 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                     is_rate_limit = any(kw in combined for kw in RATE_LIMIT_KEYWORDS)
                     logger.debug("recent stderr: %s", recent_stderr[-1][:200])
                     if is_rate_limit:
-                        try: proc.kill()
-                        except: pass
+                        terminate_stream_process()
                         err_text = "\n".join(recent_stderr[-5:])
                         yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
                         return
                     if not has_json_output:
-                        try: proc.kill()
-                        except: pass
+                        terminate_stream_process()
                         err_text = "\n".join(recent_stderr[-5:])
                         yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
                         return
                 # 无任何输出超过 25 秒，终止（比前端 30 秒超时早）
                 if elapsed > 25:
-                    try: proc.kill()
-                    except: pass
+                    terminate_stream_process()
                     err_msg = "模型无响应（可能已达到使用限制），请切换模型后重试"
                     logger.warning("killing opencode process after %ss of silence", elapsed)
                     yield f"event: stream_error\ndata: {err_msg}\n\n"
@@ -669,8 +672,7 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                 err_text = extract_error(event)
                 if err_text:
                     logger.warning("opencode stream error detected: %s", err_text[:200])
-                    try: proc.kill()
-                    except: pass
+                    terminate_stream_process()
                     yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
                     return
 
@@ -718,8 +720,7 @@ def run_opencode_stream(cmd, session_id, timeout=600):
                 if non_json and len(non_json) > 5:
                     lower_line = non_json.lower()
                     if any(kw in lower_line for kw in RATE_LIMIT_KEYWORDS):
-                        try: proc.kill()
-                        except: pass
+                        terminate_stream_process()
                         yield f"event: stream_error\ndata: {safe_truncate(non_json)}\n\n"
                         return
 
@@ -733,16 +734,14 @@ def run_opencode_stream(cmd, session_id, timeout=600):
             yield f"event: stream_error\ndata: {safe_truncate(err_text)}\n\n"
 
     except GeneratorExit:
-        try: proc.kill()
-        except: pass
-        try: proc.wait(timeout=5)
-        except: pass
+        process_manager.terminate(proc, timeout=5)
     except subprocess.TimeoutExpired:
-        try: proc.kill()
-        except: pass
+        terminate_stream_process()
         yield "event: stream_error\ndata: 请求超时\n\n"
     finally:
+        process_manager.unregister(proc)
         stdout_thread.join(timeout=2)
+        stderr_thread.join(timeout=2)
 
 
 # ── Phase 2: SSE 流式输出 ──────────────────────────────
