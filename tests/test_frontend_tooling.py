@@ -41,7 +41,7 @@ def test_frontend_api_client_scaffold_exports_core_helpers():
 def test_react_app_loads_core_api_data():
     app_source = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
 
-    for helper in ["getStats", "getDirectories", "getSessions", "getAvailableModels"]:
+    for helper in ["getStats", "getDirectories", "getSessions", "getAvailableModels", "getSession"]:
         assert helper in app_source
 
     for state_marker in ["useReducer", "selectedDirectory", "selectedModel", "blockedProviders"]:
@@ -52,3 +52,5 @@ def test_react_app_loads_core_api_data():
     assert 'status: "error"' in app_source
     assert "OpenCode Sessions" in app_source
     assert "Collapse sidebar" in app_source
+    assert "MessageTimeline" in app_source
+    assert "step-finish" in app_source
