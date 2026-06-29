@@ -1,0 +1,84 @@
+import json
+import subprocess
+
+import app as webapp
+
+
+class FakePipe:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def __iter__(self):
+        return iter(self._lines)
+
+
+class FakeStreamProcess:
+    def __init__(self, stdout_lines, stderr_lines=None):
+        self.pid = 4242
+        self.stdout = FakePipe(stdout_lines)
+        self.stderr = FakePipe(stderr_lines or [])
+        self.returncode = None
+        self.wait_calls = 0
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        self.wait_calls += 1
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+
+class FakeStreamProcessManager:
+    def __init__(self, process):
+        self.process = process
+        self.started = []
+        self.terminated = []
+        self.unregistered = []
+
+    def start(self, command, **kwargs):
+        self.started.append((command, kwargs))
+        return self.process
+
+    def terminate(self, process, timeout=None):
+        self.terminated.append((process, timeout))
+        process.returncode = -15
+        return True
+
+    def unregister(self, process):
+        self.unregistered.append(process)
+        return True
+
+
+def test_run_opencode_stream_uses_process_manager_for_normal_exit(monkeypatch):
+    process = FakeStreamProcess([
+        json.dumps({
+            "type": "step_finish",
+            "part": {"reason": "stop", "tokens": {"total": 3}, "cost": 0.01},
+        }) + "\n"
+    ])
+    manager = FakeStreamProcessManager(process)
+    monkeypatch.setattr(webapp, "process_manager", manager)
+
+    events = list(webapp.run_opencode_stream(["opencode", "run"], "ses_1", timeout=1))
+
+    assert manager.started[0][0] == ["opencode", "run"]
+    assert manager.started[0][1]["stdout"] == subprocess.PIPE
+    assert any("event: done" in event for event in events)
+    assert manager.terminated == []
+    assert manager.unregistered == [process]
+
+
+def test_run_opencode_stream_terminates_process_manager_on_error(monkeypatch):
+    process = FakeStreamProcess([
+        json.dumps({"type": "error", "error": {"message": "rate limited"}}) + "\n"
+    ])
+    manager = FakeStreamProcessManager(process)
+    monkeypatch.setattr(webapp, "process_manager", manager)
+
+    events = list(webapp.run_opencode_stream(["opencode", "run"], "ses_1", timeout=1))
+
+    assert any("event: stream_error" in event and "rate limited" in event for event in events)
+    assert manager.terminated == [(process, 2)]
+    assert manager.unregistered == [process]
