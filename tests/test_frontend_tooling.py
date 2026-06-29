@@ -8,10 +8,12 @@ def test_frontend_package_exposes_vite_build_script():
     assert package["scripts"]["build"] == (
         "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && vite build"
     )
+    assert package["scripts"]["test"] == "vitest run"
     assert "react" in package["dependencies"]
     assert "react-dom" in package["dependencies"]
     assert "vite" in package["dependencies"]
     assert "typescript" in package["dependencies"]
+    assert "vitest" in package["devDependencies"]
 
 
 def test_frontend_api_client_scaffold_exports_core_helpers():
