@@ -15,6 +15,8 @@ def test_frontend_package_exposes_vite_build_script():
     assert "typescript" in package["dependencies"]
     assert "react-markdown" in package["dependencies"]
     assert "remark-gfm" in package["dependencies"]
+    assert "prismjs" in package["dependencies"]
+    assert "@types/prismjs" in package["devDependencies"]
     assert "vitest" in package["devDependencies"]
 
 
@@ -60,6 +62,7 @@ def test_react_app_loads_core_api_data():
     assert "createNewSessionStream" in app_source
     assert "ToolCard" in app_source
     assert "ToolSection" in app_source
+    assert "Prism.highlight" in app_source
     assert "EventSource" in app_source
     assert "ReactMarkdown" in app_source
     assert "remarkGfm" in app_source
