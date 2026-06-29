@@ -10,6 +10,7 @@ let currentModel = '';    // 当前选中模型
 let eventSource = null;
 let syncEventSource = null;
 let syncRefreshTimer = null;
+let syncReloadSessionId = null;
 let currentDirectory = '';  // 当前会话的工作目录
 let compareMode = false;    // 对比模式
 let compareIds = [];        // 选中的对比会话 ID 列表
@@ -46,15 +47,40 @@ function invalidateSessionCache(change) {
   }
 }
 
+function getChangedCurrentSessionId(change) {
+  if (!currentSessionId || !change) return null;
+  const changedIds = [
+    change.session && change.session.id,
+    change.previous && change.previous.id,
+  ];
+  return changedIds.includes(currentSessionId) ? currentSessionId : null;
+}
+
 function scheduleSessionListRefresh(change) {
   invalidateSessionCache(change);
+  const changedCurrentSessionId = getChangedCurrentSessionId(change);
+  if (changedCurrentSessionId) {
+    syncReloadSessionId = changedCurrentSessionId;
+  }
+
   if (syncRefreshTimer) clearTimeout(syncRefreshTimer);
   syncRefreshTimer = setTimeout(async () => {
     syncRefreshTimer = null;
+    const reloadSessionId = syncReloadSessionId;
+    syncReloadSessionId = null;
     try {
       await refreshSessionList();
       if (currentSessionId && !allSessions.some(s => s.id === currentSessionId)) {
         showList();
+        return;
+      }
+      if (
+        reloadSessionId &&
+        currentSessionId === reloadSessionId &&
+        !eventSource &&
+        allSessions.some(s => s.id === reloadSessionId)
+      ) {
+        await openSession(reloadSessionId);
       }
     } catch (_) {
       // The EventSource connection will keep running; the next change can retry.

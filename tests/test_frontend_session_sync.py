@@ -24,12 +24,15 @@ let sessions = [];
 let allDirectories = [];
 let allSessions = [];
 let currentSessionId = 'keep';
+let eventSource = null;
 let compareIds = ['keep', 'drop'];
 let syncEventSource = null;
 let syncRefreshTimer = null;
+let syncReloadSessionId = null;
 const SESSION_CACHE = { keep: { stale: true }, old: { stale: true } };
 let renderCount = 0;
 let showedList = false;
+const reloadedSessionIds = [];
 
 const responses = {
   '/api/directories': { directories: [{ path: 'C:/repo', name: 'repo' }] },
@@ -47,6 +50,10 @@ function renderSidebar() {
 function showList() {
   showedList = true;
   currentSessionId = null;
+}
+
+async function openSession(id) {
+  reloadedSessionIds.push(id);
 }
 
 class FakeEventSource {
@@ -88,6 +95,25 @@ global.EventSource = FakeEventSource;
   assert.strictEqual(FakeEventSource.instances[0].url, '/api/events');
   assert.strictEqual(typeof FakeEventSource.instances[0].listeners.session_change, 'function');
 
+  SESSION_CACHE.keep = { stale: true };
+  responses['/api/sessions?limit=200'] = { sessions: [{ id: 'keep', title: 'Keep updated' }] };
+  handleSessionChangeEvent({ data: JSON.stringify({ type: 'updated', session: { id: 'keep' } }) });
+  assert.strictEqual('keep' in SESSION_CACHE, false);
+
+  await new Promise(resolve => setTimeout(resolve, 350));
+  assert.deepStrictEqual(reloadedSessionIds, ['keep']);
+  assert.strictEqual(showedList, false);
+
+  SESSION_CACHE.keep = { stale: true };
+  eventSource = { active: true };
+  handleSessionChangeEvent({ data: JSON.stringify({ type: 'updated', session: { id: 'keep' } }) });
+
+  await new Promise(resolve => setTimeout(resolve, 350));
+  assert.deepStrictEqual(reloadedSessionIds, ['keep']);
+  eventSource = null;
+
+  SESSION_CACHE.keep = { stale: true };
+  SESSION_CACHE.old = { stale: true };
   responses['/api/sessions?limit=200'] = { sessions: [] };
   handleSessionChangeEvent({ data: JSON.stringify({ session: { id: 'keep' }, previous: { id: 'old' } }) });
   assert.strictEqual('keep' in SESSION_CACHE, false);
