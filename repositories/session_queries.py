@@ -97,13 +97,21 @@ def fetch_session_detail(conn, session_id):
 
 
 def fetch_session_messages_with_parts(conn, session_id):
+    part_created_expr = "p.time_created" if has_table_column(conn, "part", "time_created") else "NULL"
+    part_updated_expr = "p.time_updated" if has_table_column(conn, "part", "time_updated") else "NULL"
+
     return conn.execute(
         """SELECT m.id, m.time_created, m.data,
-                  p.data as part_data
+                  p.data as part_data,
+                  {part_created_expr} as part_time_created,
+                  {part_updated_expr} as part_time_updated
            FROM message m
            LEFT JOIN part p ON p.message_id = m.id
            WHERE m.session_id = ?
-           ORDER BY m.time_created ASC, p.id ASC""",
+           ORDER BY m.time_created ASC, p.id ASC""".format(
+            part_created_expr=part_created_expr,
+            part_updated_expr=part_updated_expr,
+        ),
         (session_id,),
     ).fetchall()
 

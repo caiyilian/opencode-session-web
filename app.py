@@ -123,6 +123,27 @@ def format_time(ms: int) -> str:
         return dt.strftime("%m-%d %H:%M")
 
 
+def normalize_tool_status(*values) -> str:
+    for value in values:
+        if value is None:
+            continue
+        normalized = str(value).strip().lower()
+        if normalized:
+            return normalized
+    return ""
+
+
+def add_tool_timing_metadata(entry: dict, part_row: dict):
+    created = part_row.get("time_created_raw")
+    updated = part_row.get("time_updated_raw")
+    if created is not None:
+        entry["time_created_raw"] = created
+    if updated is not None:
+        entry["time_updated_raw"] = updated
+    if isinstance(created, int) and isinstance(updated, int) and updated >= created:
+        entry["duration_ms"] = updated - created
+
+
 def extract_message_role(data: dict) -> str:
     """从 message.data JSON 中提取角色"""
     return data.get("role", "unknown")
@@ -356,7 +377,11 @@ def api_session_detail(session_id):
         if m["part_data"]:
             try:
                 part = json.loads(m["part_data"])
-                msg_map[mid]["parts"].append(part)
+                msg_map[mid]["parts"].append({
+                    "data": part,
+                    "time_created_raw": m["part_time_created"],
+                    "time_updated_raw": m["part_time_updated"],
+                })
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -365,7 +390,8 @@ def api_session_detail(session_id):
     for mid in sorted(msg_map.keys(), key=lambda x: msg_map[x]["time_created_raw"]):
         m = msg_map[mid]
         parts_out = []
-        for p in m["parts"]:
+        for part_row in m["parts"]:
+            p = part_row["data"]
             part = parse_part(p)
             t = part.type
             entry = {"type": t}
@@ -388,11 +414,14 @@ def api_session_detail(session_id):
                     entry["description"] = ""
                 entry["output"] = state.get("output", "")[:2000]
                 entry["is_hidden"] = state.get("metadata", {}).get("truncated", False) if isinstance(state.get("metadata"), dict) else False
+                entry["status"] = normalize_tool_status(state.get("status"), state.get("state"), p.get("status"))
+                add_tool_timing_metadata(entry, part_row)
             elif t == "tool_result":
                 entry["tool_name"] = part.tool
                 entry["content"] = part.text
-                entry["status"] = p.get("status", "success")
+                entry["status"] = normalize_tool_status(p.get("status"), part.raw.get("status")) or "success"
                 entry["is_hidden"] = p.get("is_hidden", False)
+                add_tool_timing_metadata(entry, part_row)
             elif t == "step-start":
                 pass
             elif t == "step-finish":
