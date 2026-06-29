@@ -1,4 +1,5 @@
 from db import (
+    get_session_usage,
     get_total_usage,
     has_table_column,
     session_column_expr,
@@ -85,6 +86,30 @@ def fetch_session_list(conn, *, q="", directory="", model="", limit=50, offset=0
     ).fetchall()
 
     return total, rows
+
+
+def fetch_session_detail(conn, session_id):
+    row = conn.execute("SELECT * FROM session WHERE id = ?", (session_id,)).fetchone()
+    if not row:
+        return None, None
+
+    return row, get_session_usage(conn, session_id)
+
+
+def fetch_session_messages_with_parts(conn, session_id):
+    return conn.execute(
+        """SELECT m.id, m.time_created, m.data,
+                  p.data as part_data
+           FROM message m
+           LEFT JOIN part p ON p.message_id = m.id
+           WHERE m.session_id = ?
+           ORDER BY m.time_created ASC, p.id ASC""",
+        (session_id,),
+    ).fetchall()
+
+
+def fetch_message_detail(conn, message_id):
+    return conn.execute("SELECT * FROM message WHERE id = ?", (message_id,)).fetchone()
 
 
 def fetch_token_stats(conn, *, since_ms):

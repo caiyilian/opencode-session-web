@@ -19,7 +19,10 @@ from db import (
 )
 from logging_config import configure_logging
 from repositories.session_queries import (
+    fetch_message_detail,
+    fetch_session_detail,
     fetch_session_list,
+    fetch_session_messages_with_parts,
     fetch_stats_overview,
     fetch_token_stats,
 )
@@ -302,11 +305,7 @@ def api_sessions_compare():
 def api_session_detail(session_id):
     """获取单个会话详情"""
     conn = get_db()
-    cursor = conn.cursor()
-
-    row = cursor.execute(
-        "SELECT * FROM session WHERE id = ?", (session_id,)
-    ).fetchone()
+    row, usage = fetch_session_detail(conn, session_id)
 
     if not row:
         conn.close()
@@ -318,18 +317,10 @@ def api_session_detail(session_id):
     session["agent"] = session.get("agent") or "N/A"
     session["time_created_fmt"] = format_time(session["time_created"])
     session["time_updated_fmt"] = format_time(session["time_updated"])
-    session.update(get_session_usage(conn, session_id))
+    session.update(usage)
 
     # 获取消息（含内容）
-    messages = cursor.execute(
-        """SELECT m.id, m.time_created, m.data,
-                  p.data as part_data
-           FROM message m
-           LEFT JOIN part p ON p.message_id = m.id
-           WHERE m.session_id = ?
-           ORDER BY m.time_created ASC, p.id ASC""",
-        (session_id,)
-    ).fetchall()
+    messages = fetch_session_messages_with_parts(conn, session_id)
 
     msg_map = {}  # message_id -> {msg_info, parts: []}
     for m in messages:
@@ -423,11 +414,7 @@ def api_session_detail(session_id):
 def api_message_detail(message_id):
     """获取单条消息的完整内容"""
     conn = get_db()
-    cursor = conn.cursor()
-
-    row = cursor.execute(
-        "SELECT * FROM message WHERE id = ?", (message_id,)
-    ).fetchone()
+    row = fetch_message_detail(conn, message_id)
     conn.close()
 
     if not row:
