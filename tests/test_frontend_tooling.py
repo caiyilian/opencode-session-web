@@ -9,6 +9,7 @@ def test_frontend_package_exposes_vite_build_script():
         "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && vite build"
     )
     assert package["scripts"]["test"] == "vitest run"
+    assert package["scripts"]["test:e2e"] == "npm run build && playwright test"
     assert "react" in package["dependencies"]
     assert "react-dom" in package["dependencies"]
     assert "vite" in package["dependencies"]
@@ -17,6 +18,7 @@ def test_frontend_package_exposes_vite_build_script():
     assert "remark-gfm" in package["dependencies"]
     assert "prismjs" in package["dependencies"]
     assert "@types/prismjs" in package["devDependencies"]
+    assert "@playwright/test" in package["devDependencies"]
     assert "vitest" in package["devDependencies"]
 
 
