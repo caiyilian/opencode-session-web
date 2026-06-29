@@ -101,6 +101,23 @@ def test_run_opencode_stream_terminates_process_manager_on_error(monkeypatch):
     assert manager.unregistered == [process]
 
 
+def test_run_opencode_stream_formats_non_json_known_error(monkeypatch):
+    process = FakeStreamProcess(["quota exceeded\n"])
+    manager = FakeStreamProcessManager(process)
+    monkeypatch.setattr(webapp, "process_manager", manager)
+
+    events = list(webapp.run_opencode_stream(["opencode", "run"], "ses_1", timeout=1))
+
+    assert any(
+        "event: stream_error" in event
+        and "模型额度或速率已受限" in event
+        and "quota exceeded" in event
+        for event in events
+    )
+    assert manager.terminated == [(process, 2)]
+    assert manager.unregistered == [process]
+
+
 def test_run_opencode_stream_ignores_tool_calls_step_finish(monkeypatch):
     process = FakeStreamProcess([
         json.dumps({
