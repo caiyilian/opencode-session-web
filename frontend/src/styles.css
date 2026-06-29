@@ -401,6 +401,10 @@ select {
   background: #ffffff;
 }
 
+.timeline-panel {
+  grid-column: 1 / -1;
+}
+
 .panel-heading {
   display: flex;
   align-items: center;
@@ -501,6 +505,150 @@ select {
 
 .panel-status {
   margin-top: 20px;
+}
+
+.timeline-panel .panel-status {
+  margin: 14px;
+}
+
+.message-timeline {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.message-card {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfe;
+}
+
+.message-card.user {
+  background: #f8fbff;
+}
+
+.message-card.assistant {
+  background: #ffffff;
+}
+
+.message-avatar {
+  display: flex;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  color: #24456f;
+  background: #eef3f9;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.message-card.user .message-avatar {
+  color: #0f766e;
+  background: #e6f6f3;
+}
+
+.message-content {
+  min-width: 0;
+}
+
+.message-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  color: #697385;
+  font-size: 12px;
+}
+
+.message-header strong {
+  color: #1f2937;
+  font-size: 13px;
+}
+
+.message-parts {
+  display: grid;
+  gap: 10px;
+  margin-top: 9px;
+}
+
+.message-text,
+.part-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #202124;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.message-text.muted,
+.part-text.compact {
+  color: #697385;
+}
+
+.part-block {
+  min-width: 0;
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f8fafc;
+}
+
+.reasoning-part summary {
+  cursor: pointer;
+  color: #24456f;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.reasoning-part .part-text {
+  margin-top: 8px;
+}
+
+.part-heading,
+.step-part {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+
+.part-heading {
+  margin-bottom: 8px;
+  color: #1f2937;
+  font-size: 13px;
+}
+
+.part-code {
+  max-height: 320px;
+  margin: 8px 0 0;
+  overflow: auto;
+  border: 1px solid #d9e0ea;
+  border-radius: 6px;
+  padding: 9px;
+  color: #202124;
+  background: #ffffff;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.unknown-part {
+  margin: 0;
+}
+
+.step-part {
+  color: #52606f;
+  font-size: 12px;
 }
 
 .status-block.error,
