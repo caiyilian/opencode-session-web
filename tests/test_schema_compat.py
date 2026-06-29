@@ -102,6 +102,27 @@ def _create_db(path, *, old_usage_columns: bool):
         conn.execute(
             "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)",
             (
+                f"part_{sid}_tool",
+                mid,
+                sid,
+                1_700_000_004_050,
+                1_700_000_004_550,
+                json.dumps(
+                    {
+                        "type": "tool",
+                        "tool": "bash",
+                        "state": {
+                            "status": "completed",
+                            "input": {"command": "echo hi", "description": "Check shell"},
+                            "output": "hi",
+                        },
+                    }
+                ),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)",
+            (
                 f"part_{sid}_finish",
                 mid,
                 sid,
@@ -202,8 +223,17 @@ def test_session_detail_and_compare_include_usage(client):
     assert detail_payload["session"]["cost"] >= 0
     parts = detail_payload["messages"][0]["parts"]
     text_part = next(part for part in parts if part["type"] == "text")
+    tool_part = next(part for part in parts if part["type"] == "tool")
     step_finish_part = next(part for part in parts if part["type"] == "step-finish")
     assert text_part == {"type": "text", "text": "hello from ses_old"}
+    assert tool_part["tool"] == "bash"
+    assert tool_part["input"] == "echo hi"
+    assert tool_part["description"] == "Check shell"
+    assert tool_part["output"] == "hi"
+    assert tool_part["status"] == "completed"
+    assert tool_part["time_created_raw"] == 1_700_000_004_050
+    assert tool_part["time_updated_raw"] == 1_700_000_004_550
+    assert tool_part["duration_ms"] == 500
     assert step_finish_part["tokens"]["total"] == 15
     assert step_finish_part["cost"] >= 0
     assert step_finish_part["reason"] == "stop"

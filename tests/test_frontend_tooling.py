@@ -63,6 +63,9 @@ def test_react_app_loads_core_api_data():
     assert "ToolCard" in app_source
     assert "ToolSection" in app_source
     assert "Prism.highlight" in app_source
+    assert "toolStatusMeta" in app_source
+    assert "formatDurationMs" in app_source
+    assert "tool-status-icon" in app_source
     assert "EventSource" in app_source
     assert "ReactMarkdown" in app_source
     assert "remarkGfm" in app_source

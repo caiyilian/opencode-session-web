@@ -1190,7 +1190,8 @@ function MessagePartView({ part, index }: { part: MessagePart; index: number }) 
         hidden={Boolean(part.is_hidden)}
         input={stringValue(part.input)}
         output={stringValue(part.output)}
-        status={part.is_hidden ? "Hidden output" : "Tool call"}
+        durationMs={partDurationMs(part)}
+        status={stringValue(part.status)}
         tool={stringValue(part.tool)}
         variant="call"
       />
@@ -1201,8 +1202,9 @@ function MessagePartView({ part, index }: { part: MessagePart; index: number }) 
     return (
       <ToolCard
         hidden={Boolean(part.is_hidden)}
+        durationMs={partDurationMs(part)}
         output={stringifyValue(part.content)}
-        status={stringValue(part.status) || (part.is_hidden ? "Hidden output" : "Result")}
+        status={stringValue(part.status)}
         tool={stringValue(part.tool_name)}
         variant="result"
       />
@@ -1236,6 +1238,7 @@ function MessagePartView({ part, index }: { part: MessagePart; index: number }) 
 
 function ToolCard({
   description = "",
+  durationMs,
   hidden,
   input = "",
   output = "",
@@ -1244,6 +1247,7 @@ function ToolCard({
   variant,
 }: {
   description?: string;
+  durationMs?: number;
   hidden: boolean;
   input?: string;
   output?: string;
@@ -1254,6 +1258,8 @@ function ToolCard({
   const name = tool || (variant === "call" ? "tool" : "tool result");
   const kind = toolKind(name);
   const hasBody = Boolean(description || input || output || hidden);
+  const statusMeta = toolStatusMeta(status, hidden, variant);
+  const durationLabel = durationMs === undefined ? "" : formatDurationMs(durationMs);
 
   return (
     <details className={`tool-card ${kind.className}`} open={variant === "call"}>
@@ -1262,7 +1268,11 @@ function ToolCard({
           <strong>{name}</strong>
           <span>{kind.label}</span>
         </span>
-        <span className={`state-pill ${hidden ? "muted" : ""}`}>{status}</span>
+        <span className={`state-pill tool-status ${statusMeta.tone}`}>
+          <span className="tool-status-icon" aria-hidden="true" />
+          <span>{statusMeta.label}</span>
+          {durationLabel && <span className="tool-duration">{durationLabel}</span>}
+        </span>
       </summary>
       {hasBody ? (
         <div className="tool-card-body">
@@ -1442,6 +1452,62 @@ function toolKind(tool: string) {
   if (normalized.includes("edit")) return { className: "tool-edit", label: "Edit" };
   if (normalized.includes("glob")) return { className: "tool-glob", label: "Search" };
   return { className: "tool-generic", label: "Tool" };
+}
+
+function toolStatusMeta(status: string, hidden: boolean, variant: "call" | "result") {
+  if (hidden) return { label: "Hidden", tone: "hidden" };
+
+  const normalized = status.trim().toLowerCase();
+  if (["running", "pending", "queued", "started", "in_progress", "in-progress"].includes(normalized)) {
+    return { label: "Running", tone: "running" };
+  }
+  if (["success", "succeeded", "complete", "completed", "done", "ok"].includes(normalized)) {
+    return { label: "Success", tone: "success" };
+  }
+  if (["error", "errored", "failed", "failure", "timeout", "cancelled", "canceled"].includes(normalized)) {
+    return { label: titleCaseStatus(normalized), tone: "error" };
+  }
+  if (normalized) return { label: titleCaseStatus(normalized), tone: "neutral" };
+
+  return variant === "result"
+    ? { label: "Result", tone: "success" }
+    : { label: "Tool call", tone: "neutral" };
+}
+
+function titleCaseStatus(status: string) {
+  return status
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function partDurationMs(part: MessagePart) {
+  const timedPart = part as {
+    duration_ms?: unknown;
+    time_created_raw?: unknown;
+    time_updated_raw?: unknown;
+  };
+  const explicit = numberValue(timedPart.duration_ms);
+  if (explicit !== undefined) return explicit;
+
+  const created = numberValue(timedPart.time_created_raw);
+  const updated = numberValue(timedPart.time_updated_raw);
+  if (created === undefined || updated === undefined || updated < created) return undefined;
+  return updated - created;
+}
+
+function formatDurationMs(durationMs: number) {
+  const normalized = Math.max(0, Math.round(durationMs));
+  if (normalized < 1000) return `${normalized} ms`;
+  if (normalized < 60_000) {
+    const seconds = normalized / 1000;
+    return `${seconds < 10 ? seconds.toFixed(1) : seconds.toFixed(0)} s`;
+  }
+
+  const minutes = Math.floor(normalized / 60_000);
+  const seconds = Math.round((normalized % 60_000) / 1000);
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
 function applyStreamEvent(
@@ -1625,6 +1691,10 @@ function stringValue(value: unknown) {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return value;
   return stringifyValue(value);
+}
+
+function numberValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function numberRecordValue(value: unknown): Record<string, number> | null {
