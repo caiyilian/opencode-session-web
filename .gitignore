@@ -17,6 +17,8 @@ uv.lock
 # Node / frontend
 node_modules/
 frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
 
 # IDE
 .idea/
