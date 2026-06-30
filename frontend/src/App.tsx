@@ -26,6 +26,7 @@ import {
   getWorkspaceCommands,
   getWorkspaceGit,
   getWorkspaceProjects,
+  getWorkspaceTaskReport,
   getWorkspaceTasks,
   runWorkspaceCommand,
   undoSession,
@@ -43,6 +44,7 @@ import {
   type WorkspaceCommandRun,
   type WorkspaceGitSnapshot,
   type WorkspaceTask,
+  type WorkspaceTaskReport,
   type WorkspaceTaskStatus,
 } from "./api";
 
@@ -120,6 +122,12 @@ type GitState =
   | { status: "ready"; projectPath: string; data: WorkspaceGitSnapshot }
   | { status: "error"; projectPath: string; message: string };
 
+type TaskReportState =
+  | { status: "idle" }
+  | { status: "loading"; taskId: string }
+  | { status: "ready"; taskId: string; data: WorkspaceTaskReport }
+  | { status: "error"; taskId: string; message: string };
+
 type StreamStatus = "connecting" | "streaming" | "done" | "error" | "stopped";
 
 interface SessionFilters {
@@ -165,6 +173,7 @@ export default function App() {
   const [taskDraftTitle, setTaskDraftTitle] = useState("");
   const [taskError, setTaskError] = useState("");
   const [taskBusyId, setTaskBusyId] = useState("");
+  const [taskReportState, setTaskReportState] = useState<TaskReportState>({ status: "idle" });
   const [gitState, setGitState] = useState<GitState>({ status: "idle" });
   const [commandKey, setCommandKey] = useState("");
   const [commandTaskId, setCommandTaskId] = useState("");
@@ -362,6 +371,10 @@ export default function App() {
     };
   }, [selectedProject?.path]);
 
+  useEffect(() => {
+    setTaskReportState({ status: "idle" });
+  }, [selectedProject?.path]);
+
   const activeFilterCount = [filters.query.trim(), filters.directory, filters.model].filter(
     Boolean,
   ).length;
@@ -455,17 +468,29 @@ export default function App() {
     setTaskBusyId("create");
     setTaskError("");
     try {
-      await createWorkspaceTask({
+      const created = await createWorkspaceTask({
         title,
         project_path: selectedProject.path,
         linked_session_ids: selectedSession ? [selectedSession.id] : [],
       });
       setTaskDraftTitle("");
+      setCommandTaskId(created.task.id);
+      setTaskReportState({ status: "idle" });
       await refreshDashboard();
     } catch (error) {
       setTaskError(errorText(error));
     } finally {
       setTaskBusyId("");
+    }
+  }
+
+  async function loadProjectTaskReport(task: WorkspaceTask) {
+    setTaskReportState({ status: "loading", taskId: task.id });
+    try {
+      const response = await getWorkspaceTaskReport(task.id);
+      setTaskReportState({ status: "ready", taskId: task.id, data: response.report });
+    } catch (error) {
+      setTaskReportState({ status: "error", taskId: task.id, message: errorText(error) });
     }
   }
 
@@ -1177,6 +1202,7 @@ export default function App() {
                 draftTitle={taskDraftTitle}
                 error={taskError}
                 project={selectedProject}
+                reportState={taskReportState}
                 statuses={data.taskStatuses}
                 tasks={selectedProjectTasks}
                 onDraftTitleChange={(value) => {
@@ -1184,6 +1210,7 @@ export default function App() {
                   if (taskError) setTaskError("");
                 }}
                 onCreate={createTaskForSelectedProject}
+                onReport={loadProjectTaskReport}
                 onStatusChange={updateProjectTaskStatus}
               />
               <GitSnapshotPanel state={gitState} />
@@ -1486,20 +1513,24 @@ function ProjectTasksPanel({
   draftTitle,
   error,
   project,
+  reportState,
   statuses,
   tasks,
   onCreate,
   onDraftTitleChange,
+  onReport,
   onStatusChange,
 }: {
   busyId: string;
   draftTitle: string;
   error: string;
   project: ProjectWorkspace | null;
+  reportState: TaskReportState;
   statuses: WorkspaceTaskStatus[];
   tasks: WorkspaceTask[];
   onCreate: () => void;
   onDraftTitleChange: (value: string) => void;
+  onReport: (task: WorkspaceTask) => void;
   onStatusChange: (task: WorkspaceTask, status: WorkspaceTaskStatus) => void;
 }) {
   const visibleStatuses = statuses.filter((status) => status !== "archived");
@@ -1547,34 +1578,67 @@ function ProjectTasksPanel({
       )}
       <div className="task-list">
         {tasks.length > 0 ? (
-          tasks.map((task) => (
-            <article className={`task-row ${task.status}`} key={task.id}>
-              <div>
-                <h4>{task.title}</h4>
-                <p>
-                  {WORKSPACE_TASK_STATUS_LABELS[task.status]} · {task.linked_session_ids.length} linked sessions
-                </p>
-              </div>
-              <select
-                aria-label={`Set status for ${task.title}`}
-                disabled={busyId === task.id}
-                value={task.status}
-                onChange={(event) =>
-                  onStatusChange(task, event.target.value as WorkspaceTaskStatus)
-                }
-              >
-                {visibleStatuses.map((status) => (
-                  <option key={status} value={status}>
-                    {WORKSPACE_TASK_STATUS_LABELS[status]}
-                  </option>
-                ))}
-              </select>
-            </article>
-          ))
+          tasks.map((task) => {
+            const isReportBusy = reportState.status === "loading" && reportState.taskId === task.id;
+            return (
+              <article className={`task-row ${task.status}`} key={task.id}>
+                <div>
+                  <h4>{task.title}</h4>
+                  <p>
+                    {WORKSPACE_TASK_STATUS_LABELS[task.status]} · {task.linked_session_ids.length} linked sessions
+                  </p>
+                </div>
+                <div className="task-row-actions">
+                  <select
+                    aria-label={`Set status for ${task.title}`}
+                    disabled={busyId === task.id}
+                    value={task.status}
+                    onChange={(event) =>
+                      onStatusChange(task, event.target.value as WorkspaceTaskStatus)
+                    }
+                  >
+                    {visibleStatuses.map((status) => (
+                      <option key={status} value={status}>
+                        {WORKSPACE_TASK_STATUS_LABELS[status]}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    aria-label={`Build report for ${task.title}`}
+                    className="task-report-button"
+                    disabled={isReportBusy}
+                    type="button"
+                    onClick={() => onReport(task)}
+                  >
+                    {isReportBusy ? "Loading" : "Report"}
+                  </button>
+                </div>
+              </article>
+            );
+          })
         ) : (
           <PanelStatus label={project ? "No tasks for this project" : "No project selected"} />
         )}
       </div>
+      {reportState.status === "loading" && (
+        <div className="task-report-preview">
+          <PanelStatus label="Loading task report" />
+        </div>
+      )}
+      {reportState.status === "error" && (
+        <div className="task-report-preview">
+          <PanelStatus label={reportState.message} tone="error" />
+        </div>
+      )}
+      {reportState.status === "ready" && (
+        <div className="task-report-preview">
+          <div className="task-report-header">
+            <h4>Task Report</h4>
+            <span>{formatNumber(reportState.data.command_runs.length)} runs</span>
+          </div>
+          <pre>{reportState.data.markdown}</pre>
+        </div>
+      )}
     </section>
   );
 }

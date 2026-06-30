@@ -9,6 +9,7 @@ import type {
   UsedModelsResponse,
   WorkspaceProjectsResponse,
   WorkspaceTaskResponse,
+  WorkspaceTaskReportResponse,
   WorkspaceTasksResponse,
   WorkspaceTaskStatus,
   WorkspaceGitResponse,
@@ -178,6 +179,12 @@ export function updateWorkspaceTask(taskId: string, payload: UpdateWorkspaceTask
     method: "PATCH",
     body: JSON.stringify(payload),
   });
+}
+
+export function getWorkspaceTaskReport(taskId: string) {
+  return apiRequest<WorkspaceTaskReportResponse>(
+    `/api/workspace/tasks/${encodeURIComponent(taskId)}/report`,
+  );
 }
 
 export function getWorkspaceGit(projectPath: string) {

@@ -13,6 +13,7 @@ import {
   getWorkspaceGit,
   getWorkspaceCommands,
   getWorkspaceCommandRuns,
+  getWorkspaceTaskReport,
   getWorkspaceTasks,
   getWorkspaceProjects,
   runWorkspaceCommand,
@@ -130,6 +131,15 @@ describe("api client", () => {
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({ status: "done" }),
+      }),
+    );
+
+    mockJsonResponse({ report: { markdown: "# Task" } });
+    await getWorkspaceTaskReport("task/1");
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/tasks/task%2F1/report",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
   });

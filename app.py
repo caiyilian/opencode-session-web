@@ -33,6 +33,7 @@ from repositories.workspace_tasks import (
     create_task,
     fetch_command_runs,
     fetch_tasks,
+    get_task,
     record_command_run,
     update_task,
 )
@@ -48,6 +49,7 @@ from services.workspace_commands import (
     parse_workspace_commands,
     run_workspace_command,
 )
+from services.workspace_reports import build_task_report
 
 app = Flask(__name__)
 logger = configure_logging()
@@ -621,6 +623,68 @@ def api_workspace_task_update(task_id):
     if not task:
         return jsonify({"error": "任务不存在"}), 404
     return jsonify({"task": task})
+
+
+@app.route("/api/workspace/tasks/<task_id>/report", methods=["GET"])
+def api_workspace_task_report(task_id):
+    workspace_conn = get_workspace_db()
+    task = get_task(workspace_conn, task_id)
+    if not task:
+        workspace_conn.close()
+        return jsonify({"error": "任务不存在"}), 404
+    command_runs = fetch_command_runs(workspace_conn, task_id=task_id, limit=10)
+    workspace_conn.close()
+
+    linked_sessions = _fetch_linked_sessions(task["linked_session_ids"])
+    git_snapshot = None
+    if task["project_path"]:
+        try:
+            git_snapshot = read_git_snapshot(task["project_path"]).to_dict()
+        except Exception as exc:
+            git_snapshot = {"is_git_repo": False, "error": str(exc)}
+
+    markdown = build_task_report(
+        task=task,
+        linked_sessions=linked_sessions,
+        command_runs=command_runs,
+        git_snapshot=git_snapshot,
+    )
+    return jsonify({
+        "report": {
+            "task": task,
+            "linked_sessions": linked_sessions,
+            "command_runs": command_runs,
+            "git": git_snapshot,
+            "markdown": markdown,
+        }
+    })
+
+
+def _fetch_linked_sessions(session_ids):
+    if not session_ids:
+        return []
+    placeholders = ",".join("?" for _ in session_ids)
+    conn = get_db()
+    model_expr = "model" if has_table_column(conn, "session", "model") else "NULL"
+    rows = conn.execute(
+        f"""SELECT id, title, directory, {model_expr} AS model, time_updated
+            FROM session
+            WHERE id IN ({placeholders})""",
+        session_ids,
+    ).fetchall()
+    conn.close()
+    by_id = {row["id"]: row for row in rows}
+    return [
+        {
+            "id": session_id,
+            "title": by_id[session_id]["title"] if session_id in by_id else "",
+            "directory": by_id[session_id]["directory"] if session_id in by_id else "",
+            "model": format_model(by_id[session_id]["model"]) if session_id in by_id else "",
+            "time_updated": format_time(by_id[session_id]["time_updated"]) if session_id in by_id else "",
+            "time_updated_raw": by_id[session_id]["time_updated"] if session_id in by_id else 0,
+        }
+        for session_id in session_ids
+    ]
 
 
 @app.route("/api/workspace/git")
