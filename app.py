@@ -27,6 +27,13 @@ from repositories.session_queries import (
     fetch_stats_overview,
     fetch_token_stats,
 )
+from repositories.workspace_tasks import (
+    TASK_STATUSES,
+    connect_workspace_db,
+    create_task,
+    fetch_tasks,
+    update_task,
+)
 from services import sse
 from services.opencode_errors import format_stream_error_message, is_known_error_text
 from services.opencode_events import parse_part
@@ -64,6 +71,11 @@ def create_app(test_config=None):
 def get_db():
     """获取数据库连接（每次请求独立，避免线程问题）"""
     return connect_db(app.config.get("OPENCODE_DB_PATH", DB_PATH))
+
+
+def get_workspace_db():
+    """Connect to the OpenCode Session Web workspace database."""
+    return connect_workspace_db(app.config["OPENCODE_WORKSPACE_DB_PATH"])
 
 
 # ── 工具函数 ──────────────────────────────────────────────
@@ -547,6 +559,60 @@ def api_workspace_projects():
         ],
         "total": len(projects),
     })
+
+
+@app.route("/api/workspace/tasks", methods=["GET"])
+def api_workspace_tasks():
+    project_path = request.args.get("project_path", "").strip()
+    status = request.args.get("status", "").strip()
+    conn = get_workspace_db()
+    try:
+        tasks = fetch_tasks(conn, project_path=project_path, status=status)
+    except ValueError as exc:
+        conn.close()
+        return jsonify({"error": str(exc)}), 400
+    conn.close()
+
+    return jsonify({
+        "tasks": tasks,
+        "statuses": sorted(TASK_STATUSES),
+        "total": len(tasks),
+    })
+
+
+@app.route("/api/workspace/tasks", methods=["POST"])
+def api_workspace_task_create():
+    payload = request.get_json(silent=True) or {}
+    conn = get_workspace_db()
+    try:
+        task = create_task(
+            conn,
+            title=payload.get("title", ""),
+            description=payload.get("description", ""),
+            project_path=payload.get("project_path", ""),
+            status=payload.get("status", "todo"),
+            linked_session_ids=payload.get("linked_session_ids"),
+        )
+    except ValueError as exc:
+        conn.close()
+        return jsonify({"error": str(exc)}), 400
+    conn.close()
+    return jsonify({"task": task}), 201
+
+
+@app.route("/api/workspace/tasks/<task_id>", methods=["PATCH"])
+def api_workspace_task_update(task_id):
+    payload = request.get_json(silent=True) or {}
+    conn = get_workspace_db()
+    try:
+        task = update_task(conn, task_id, payload)
+    except ValueError as exc:
+        conn.close()
+        return jsonify({"error": str(exc)}), 400
+    conn.close()
+    if not task:
+        return jsonify({"error": "任务不存在"}), 404
+    return jsonify({"task": task})
 
 
 @app.route("/api/models")

@@ -5,11 +5,14 @@ import {
   compareSessions,
   createForkSessionStream,
   createNewSessionStream,
+  createWorkspaceTask,
   deleteSession,
   getSession,
   getSessionStreamUrl,
   getSessions,
+  getWorkspaceTasks,
   getWorkspaceProjects,
+  updateWorkspaceTask,
   undoSession,
 } from "./client";
 
@@ -84,6 +87,45 @@ describe("api client", () => {
       "/api/workspace/projects?limit=25",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("loads, creates, and updates workspace tasks", async () => {
+    mockJsonResponse({ tasks: [], statuses: [], total: 0 });
+    await getWorkspaceTasks({ project_path: "C:/repo/app", status: "todo" });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/tasks?project_path=C%3A%2Frepo%2Fapp&status=todo",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+
+    mockJsonResponse({ task: { id: "task_1" } });
+    await createWorkspaceTask({
+      title: "Review workspace",
+      project_path: "C:/repo/app",
+      linked_session_ids: ["ses_1"],
+    });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/tasks",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          title: "Review workspace",
+          project_path: "C:/repo/app",
+          linked_session_ids: ["ses_1"],
+        }),
+      }),
+    );
+
+    mockJsonResponse({ task: { id: "task_1" } });
+    await updateWorkspaceTask("task/1", { status: "done" });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/tasks/task%2F1",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ status: "done" }),
       }),
     );
   });
