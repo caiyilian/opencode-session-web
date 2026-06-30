@@ -93,6 +93,7 @@ export interface RunWorkspaceCommandRequest {
   project_path: string;
   command_key: string;
   task_id?: string;
+  confirmed?: boolean;
 }
 
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
