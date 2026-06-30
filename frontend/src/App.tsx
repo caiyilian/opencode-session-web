@@ -174,6 +174,7 @@ export default function App() {
   const [taskError, setTaskError] = useState("");
   const [taskBusyId, setTaskBusyId] = useState("");
   const [taskReportState, setTaskReportState] = useState<TaskReportState>({ status: "idle" });
+  const [opencodeTaskId, setOpencodeTaskId] = useState("");
   const [gitState, setGitState] = useState<GitState>({ status: "idle" });
   const [commandKey, setCommandKey] = useState("");
   const [commandTaskId, setCommandTaskId] = useState("");
@@ -291,6 +292,10 @@ export default function App() {
     () => data?.commandRuns.filter((run) => run.project_path === selectedProject?.path) ?? [],
     [data?.commandRuns, selectedProject?.path],
   );
+  const opencodeTask = useMemo(
+    () => data?.tasks.find((task) => task.id === opencodeTaskId) ?? null,
+    [data?.tasks, opencodeTaskId],
+  );
   const composerModelOptions = useMemo(
     () => deriveComposerModelOptions(visibleModelOptions, selectedSession?.model ?? ""),
     [selectedSession?.model, visibleModelOptions],
@@ -373,7 +378,14 @@ export default function App() {
 
   useEffect(() => {
     setTaskReportState({ status: "idle" });
+    setOpencodeTaskId("");
   }, [selectedProject?.path]);
+
+  useEffect(() => {
+    if (opencodeTaskId && !selectedProjectTasks.some((task) => task.id === opencodeTaskId)) {
+      setOpencodeTaskId("");
+    }
+  }, [opencodeTaskId, selectedProjectTasks]);
 
   const activeFilterCount = [filters.query.trim(), filters.directory, filters.model].filter(
     Boolean,
@@ -591,6 +603,7 @@ export default function App() {
       getSessionStreamUrl(sessionId, {
         message,
         model: normalizeModelValue(composerModel),
+        task_id: opencodeTaskId,
       }),
     );
     eventSourceRef.current = source;
@@ -646,10 +659,12 @@ export default function App() {
       appendDraft((current) => ({ ...current, statusLabel: label }));
     });
 
-    source.addEventListener("done", () => {
+    source.addEventListener("done", (event) => {
+      const donePayload = parseDonePayload(event.data);
+      const doneSessionId = donePayload.session_id || sessionId;
       closeSource();
       appendDraft((current) => ({ ...current, status: "done", statusLabel: "Done" }));
-      void reloadSessionDetail(sessionId, true);
+      void refreshDashboard(doneSessionId).then(() => reloadSessionDetail(doneSessionId, true));
     });
 
     source.addEventListener("stream_error", (event) => {
@@ -676,6 +691,7 @@ export default function App() {
 
   function openNewSession() {
     const preferredDirectory = selectedSession?.directory || data?.directories[0]?.path || "";
+    setOpencodeTaskId("");
     setNewSessionDirectory(preferredDirectory);
     setNewSessionCustomDirectory("");
     setNewSessionMessage("");
@@ -687,11 +703,55 @@ export default function App() {
 
   function openForkSession() {
     if (!selectedSession) return;
+    setOpencodeTaskId("");
     setForkMessage("");
     setForkModel(composerModel);
     setForkError("");
     setForkDraft(null);
     setForkOpen(true);
+  }
+
+  function useTaskInComposer(task: WorkspaceTask) {
+    if (!selectedSession) {
+      setTaskError("Select a session before continuing a task.");
+      return;
+    }
+    setTaskError("");
+    setOpencodeTaskId(task.id);
+    setCommandTaskId(task.id);
+    setComposerText(buildWorkspaceTaskMessage(task));
+  }
+
+  function openNewSessionForTask(task: WorkspaceTask) {
+    setTaskError("");
+    setOpencodeTaskId(task.id);
+    setCommandTaskId(task.id);
+    setNewSessionDirectory(task.project_path || selectedProject?.path || data?.directories[0]?.path || "");
+    setNewSessionCustomDirectory("");
+    setNewSessionMessage(buildWorkspaceTaskMessage(task));
+    setNewSessionModel(composerModel);
+    setNewSessionError("");
+    setNewSessionDraft(null);
+    setNewSessionOpen(true);
+  }
+
+  function openForkSessionForTask(task: WorkspaceTask) {
+    if (!selectedSession) {
+      setTaskError("Select a session before forking a task.");
+      return;
+    }
+    setTaskError("");
+    setOpencodeTaskId(task.id);
+    setCommandTaskId(task.id);
+    setForkMessage(buildWorkspaceTaskMessage(task));
+    setForkModel(composerModel);
+    setForkError("");
+    setForkDraft(null);
+    setForkOpen(true);
+  }
+
+  function clearOpencodeTaskLink() {
+    setOpencodeTaskId("");
   }
 
   function closeNewSession() {
@@ -766,6 +826,7 @@ export default function App() {
           directory,
           message,
           model: normalizeModelValue(newSessionModel),
+          task_id: opencodeTaskId,
         },
         controller.signal,
       );
@@ -880,6 +941,7 @@ export default function App() {
         {
           message,
           model: normalizeModelValue(forkModel),
+          task_id: opencodeTaskId,
         },
         controller.signal,
       );
@@ -1143,7 +1205,9 @@ export default function App() {
             message={newSessionMessage}
             model={newSessionModel}
             modelOptions={composerModelOptions}
+            task={opencodeTask}
             onClose={closeNewSession}
+            onClearTask={clearOpencodeTaskLink}
             onCustomDirectoryChange={setNewSessionCustomDirectory}
             onDirectoryChange={(value) => {
               setNewSessionDirectory(value);
@@ -1179,7 +1243,9 @@ export default function App() {
                 modelOptions={composerModelOptions}
                 selectedSession={selectedSession}
                 streamDraft={streamDraft}
+                task={opencodeTask}
                 text={composerText}
+                onClearTask={clearOpencodeTaskLink}
                 onModelChange={setComposerModel}
                 onStop={stopStream}
                 onSubmit={submitComposer}
@@ -1201,6 +1267,8 @@ export default function App() {
                 busyId={taskBusyId}
                 draftTitle={taskDraftTitle}
                 error={taskError}
+                hasSelectedSession={Boolean(selectedSession)}
+                opencodeTaskId={opencodeTaskId}
                 project={selectedProject}
                 reportState={taskReportState}
                 statuses={data.taskStatuses}
@@ -1210,6 +1278,9 @@ export default function App() {
                   if (taskError) setTaskError("");
                 }}
                 onCreate={createTaskForSelectedProject}
+                onContinue={useTaskInComposer}
+                onFork={openForkSessionForTask}
+                onNewSession={openNewSessionForTask}
                 onReport={loadProjectTaskReport}
                 onStatusChange={updateProjectTaskStatus}
               />
@@ -1315,7 +1386,9 @@ export default function App() {
                 model={forkModel}
                 modelOptions={composerModelOptions}
                 session={selectedSession}
+                task={opencodeTask}
                 onClose={closeForkSession}
+                onClearTask={clearOpencodeTaskLink}
                 onMessageChange={(value) => {
                   setForkMessage(value);
                   if (forkError) setForkError("");
@@ -1410,6 +1483,17 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
     <div className="summary-item">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function TaskLinkNote({ task, onClear }: { task: WorkspaceTask; onClear: () => void }) {
+  return (
+    <div className="task-link-note">
+      <span>Task link: {task.title}</span>
+      <button type="button" onClick={onClear}>
+        Clear
+      </button>
     </div>
   );
 }
@@ -1512,24 +1596,34 @@ function ProjectTasksPanel({
   busyId,
   draftTitle,
   error,
+  hasSelectedSession,
+  opencodeTaskId,
   project,
   reportState,
   statuses,
   tasks,
   onCreate,
+  onContinue,
   onDraftTitleChange,
+  onFork,
+  onNewSession,
   onReport,
   onStatusChange,
 }: {
   busyId: string;
   draftTitle: string;
   error: string;
+  hasSelectedSession: boolean;
+  opencodeTaskId: string;
   project: ProjectWorkspace | null;
   reportState: TaskReportState;
   statuses: WorkspaceTaskStatus[];
   tasks: WorkspaceTask[];
   onCreate: () => void;
+  onContinue: (task: WorkspaceTask) => void;
   onDraftTitleChange: (value: string) => void;
+  onFork: (task: WorkspaceTask) => void;
+  onNewSession: (task: WorkspaceTask) => void;
   onReport: (task: WorkspaceTask) => void;
   onStatusChange: (task: WorkspaceTask, status: WorkspaceTaskStatus) => void;
 }) {
@@ -1580,13 +1674,15 @@ function ProjectTasksPanel({
         {tasks.length > 0 ? (
           tasks.map((task) => {
             const isReportBusy = reportState.status === "loading" && reportState.taskId === task.id;
+            const isOpenCodeTask = opencodeTaskId === task.id;
             return (
-              <article className={`task-row ${task.status}`} key={task.id}>
+              <article className={`task-row ${task.status} ${isOpenCodeTask ? "opencode-linked" : ""}`} key={task.id}>
                 <div>
                   <h4>{task.title}</h4>
                   <p>
                     {WORKSPACE_TASK_STATUS_LABELS[task.status]} · {task.linked_session_ids.length} linked sessions
                   </p>
+                  {isOpenCodeTask && <p className="task-link-state">OpenCode task link active</p>}
                 </div>
                 <div className="task-row-actions">
                   <select
@@ -1603,6 +1699,21 @@ function ProjectTasksPanel({
                       </option>
                     ))}
                   </select>
+                  <div className="task-opencode-actions" aria-label={`OpenCode actions for ${task.title}`}>
+                    <button
+                      disabled={!hasSelectedSession}
+                      type="button"
+                      onClick={() => onContinue(task)}
+                    >
+                      Continue
+                    </button>
+                    <button type="button" onClick={() => onNewSession(task)}>
+                      New
+                    </button>
+                    <button disabled={!hasSelectedSession} type="button" onClick={() => onFork(task)}>
+                      Fork
+                    </button>
+                  </div>
                   <button
                     aria-label={`Build report for ${task.title}`}
                     className="task-report-button"
@@ -2103,7 +2214,9 @@ function SessionComposer({
   modelOptions,
   selectedSession,
   streamDraft,
+  task,
   text,
+  onClearTask,
   onModelChange,
   onStop,
   onSubmit,
@@ -2115,7 +2228,9 @@ function SessionComposer({
   modelOptions: string[];
   selectedSession: SessionSummary | null;
   streamDraft: StreamDraft | null;
+  task: WorkspaceTask | null;
   text: string;
+  onClearTask: () => void;
   onModelChange: (value: string) => void;
   onStop: () => void;
   onSubmit: () => void;
@@ -2152,6 +2267,7 @@ function SessionComposer({
           {streamDraft?.statusLabel ?? (selectedSession ? "Ready" : "No session")}
         </span>
       </div>
+      {task && <TaskLinkNote task={task} onClear={onClearTask} />}
       <textarea
         disabled={disabled || isStreaming}
         placeholder="Continue this session"
@@ -2192,7 +2308,9 @@ function ForkSessionPanel({
   model,
   modelOptions,
   session,
+  task,
   onClose,
+  onClearTask,
   onMessageChange,
   onModelChange,
   onStop,
@@ -2204,7 +2322,9 @@ function ForkSessionPanel({
   model: string;
   modelOptions: string[];
   session: SessionSummary;
+  task: WorkspaceTask | null;
   onClose: () => void;
+  onClearTask: () => void;
   onMessageChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onStop: () => void;
@@ -2224,6 +2344,7 @@ function ForkSessionPanel({
         </button>
       </div>
       <div className="fork-session-form">
+        {task && <TaskLinkNote task={task} onClear={onClearTask} />}
         <label className="filter-field">
           <span>Model</span>
           <select
@@ -2288,7 +2409,9 @@ function NewSessionPanel({
   message,
   model,
   modelOptions,
+  task,
   onClose,
+  onClearTask,
   onCustomDirectoryChange,
   onDirectoryChange,
   onMessageChange,
@@ -2304,7 +2427,9 @@ function NewSessionPanel({
   message: string;
   model: string;
   modelOptions: string[];
+  task: WorkspaceTask | null;
   onClose: () => void;
+  onClearTask: () => void;
   onCustomDirectoryChange: (value: string) => void;
   onDirectoryChange: (value: string) => void;
   onMessageChange: (value: string) => void;
@@ -2323,6 +2448,7 @@ function NewSessionPanel({
         </button>
       </div>
       <div className="new-session-form">
+        {task && <TaskLinkNote task={task} onClear={onClearTask} />}
         <label className="filter-field">
           <span>Directory</span>
           <select
@@ -2816,6 +2942,19 @@ function formatCompareTime(ms: number) {
   const date = new Date(ms);
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleString();
+}
+
+function buildWorkspaceTaskMessage(task: WorkspaceTask) {
+  const lines = [
+    `Workspace task: ${task.title}`,
+    "",
+    `Project: ${task.project_path || "N/A"}`,
+  ];
+  if (task.description) {
+    lines.push("", task.description);
+  }
+  lines.push("", "Work on this task, keep the change focused, and summarize validation steps.");
+  return lines.join("\n");
 }
 
 function applyStreamEvent(
