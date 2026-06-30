@@ -11,8 +11,11 @@ import {
   getSessionStreamUrl,
   getSessions,
   getWorkspaceGit,
+  getWorkspaceCommands,
+  getWorkspaceCommandRuns,
   getWorkspaceTasks,
   getWorkspaceProjects,
+  runWorkspaceCommand,
   updateWorkspaceTask,
   undoSession,
 } from "./client";
@@ -140,6 +143,44 @@ describe("api client", () => {
       "/api/workspace/git?project_path=C%3A%2Frepo%2Fapp+with+space",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("loads and runs whitelisted workspace commands", async () => {
+    mockJsonResponse({ commands: [] });
+    await getWorkspaceCommands();
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/commands",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+
+    mockJsonResponse({ runs: [], total: 0 });
+    await getWorkspaceCommandRuns({ project_path: "C:/repo/app", limit: 5 });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/command-runs?project_path=C%3A%2Frepo%2Fapp&limit=5",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+
+    mockJsonResponse({ run: { id: "run_1" } });
+    await runWorkspaceCommand({
+      project_path: "C:/repo/app",
+      command_key: "test",
+      task_id: "task_1",
+    });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/command-runs",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          project_path: "C:/repo/app",
+          command_key: "test",
+          task_id: "task_1",
+        }),
       }),
     );
   });

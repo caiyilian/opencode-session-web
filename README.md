@@ -7,7 +7,7 @@ OpenCode 会话 Web 管理器是一个 Flask 应用，用于在浏览器中浏�
 - 按项目目录分组浏览会话，并支持标题、目录、模型搜索。
 - 查看完整消息时间线，包括 reasoning、工具调用、工具输出、耗时、token 和成本信息。
 - 继续已有会话、新建会话、Fork 会话、撤销最后一轮、删除会话和对比会话。
-- 使用 Workspace 项目面板查看项目级会话摘要、创建和推进本地任务，并查看只读 Git snapshot。
+- 使用 Workspace 项目面板查看项目级会话摘要、创建和推进本地任务、查看只读 Git snapshot，并运行受控验证命令。
 - 查看用量统计、最近项目、模型/Provider 可用状态，以及加载、空状态、错误状态和移动端布局。
 - 使用临时 SQLite fixture 运行可重复的后端、前端和 Playwright E2E 测试。
 - 监控 OpenCode 数据库更新，并在助手回复完成后发送微信 iLink 通知。
@@ -100,6 +100,8 @@ React 应用会由 Flask 从 `frontend/dist` 服务，API 请求保持同源。
 | --- | --- | --- |
 | `OPENCODE_DB_PATH` | `~/.local/share/opencode/opencode.db` | 要读取的 SQLite 数据库。使用自定义 OpenCode 数据目录或 fixture 数据库时设置它。 |
 | `OPENCODE_WORKSPACE_DB_PATH` | `~/.opencode-session-web/workspace.db` | OpenCode Session Web 自己的 Workspace 数据库，用于保存任务等本地工作台状态。 |
+| `OPENCODE_WORKSPACE_COMMANDS_JSON` | `[]` | Workspace 验证命令白名单，JSON 数组格式，每项包含 `key`、`label`、`argv` 和可选相对 `cwd`。命令不会通过 shell 执行。 |
+| `OPENCODE_WORKSPACE_COMMAND_TIMEOUT` | `120` | Workspace 验证命令的最长运行时间，单位秒。 |
 | `OPENCODE_USE_FRONTEND_DIST` | 未设置/false | 设置为 `1`、`true`、`yes` 或 `on` 时服务 React 构建产物，而不是旧版静态界面。 |
 | `OPENCODE_FRONTEND_DIST_DIR` | `frontend/dist` | Flask 服务的 React 构建目录。 |
 | `OPENCODE_STREAM_TIMEOUT` | `600` | 流式进程最长运行时间，单位秒。 |

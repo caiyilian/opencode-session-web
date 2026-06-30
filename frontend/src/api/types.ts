@@ -256,3 +256,43 @@ export interface WorkspaceGitSnapshot {
 export interface WorkspaceGitResponse {
   git: WorkspaceGitSnapshot;
 }
+
+export interface WorkspaceCommand {
+  key: string;
+  label: string;
+  argv: string[];
+  cwd: string;
+  description: string;
+}
+
+export interface WorkspaceCommandsResponse {
+  commands: WorkspaceCommand[];
+}
+
+export type WorkspaceCommandRunStatus = "success" | "failed" | "timeout";
+
+export interface WorkspaceCommandRun {
+  id: string;
+  project_path: string;
+  task_id: string;
+  command_key: string;
+  command_label: string;
+  command_argv: string[];
+  cwd: string;
+  status: WorkspaceCommandRunStatus;
+  exit_code: number | null;
+  duration_ms: number;
+  output: string;
+  started_at: number;
+  finished_at: number;
+  created_at: number;
+}
+
+export interface WorkspaceCommandRunsResponse {
+  runs: WorkspaceCommandRun[];
+  total: number;
+}
+
+export interface WorkspaceCommandRunResponse {
+  run: WorkspaceCommandRun;
+}

@@ -12,6 +12,9 @@ import type {
   WorkspaceTasksResponse,
   WorkspaceTaskStatus,
   WorkspaceGitResponse,
+  WorkspaceCommandRunResponse,
+  WorkspaceCommandRunsResponse,
+  WorkspaceCommandsResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -68,6 +71,18 @@ export interface UpdateWorkspaceTaskRequest {
   project_path?: string;
   status?: WorkspaceTaskStatus;
   linked_session_ids?: string[];
+}
+
+export interface WorkspaceCommandRunsQuery {
+  project_path?: string;
+  task_id?: string;
+  limit?: number;
+}
+
+export interface RunWorkspaceCommandRequest {
+  project_path: string;
+  command_key: string;
+  task_id?: string;
 }
 
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -171,6 +186,23 @@ export function getWorkspaceGit(projectPath: string) {
   );
 }
 
+export function getWorkspaceCommands() {
+  return apiRequest<WorkspaceCommandsResponse>("/api/workspace/commands");
+}
+
+export function getWorkspaceCommandRuns(query: WorkspaceCommandRunsQuery = {}) {
+  return apiRequest<WorkspaceCommandRunsResponse>(
+    `/api/workspace/command-runs${queryString(query)}`,
+  );
+}
+
+export function runWorkspaceCommand(payload: RunWorkspaceCommandRequest) {
+  return apiRequest<WorkspaceCommandRunResponse>("/api/workspace/command-runs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function deleteSession(sessionId: string) {
   return apiRequest<MutationResponse>(`/api/sessions/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
@@ -198,7 +230,9 @@ function errorMessage(payload: unknown): string {
   return "";
 }
 
-function queryString(query: SessionsQuery | WorkspaceTasksQuery | { project_path: string }): string {
+function queryString(
+  query: SessionsQuery | WorkspaceTasksQuery | WorkspaceCommandRunsQuery | { project_path: string },
+): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && value !== null && value !== "") {

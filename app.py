@@ -31,7 +31,9 @@ from repositories.workspace_tasks import (
     TASK_STATUSES,
     connect_workspace_db,
     create_task,
+    fetch_command_runs,
     fetch_tasks,
+    record_command_run,
     update_task,
 )
 from services import sse
@@ -41,6 +43,11 @@ from services.opencode_events import parse_part
 from services.opencode_runner import event_to_sse
 from services.process_manager import ProcessManager
 from services.sync_watcher import diff_session_snapshots, fetch_session_snapshots
+from services.workspace_commands import (
+    find_workspace_command,
+    parse_workspace_commands,
+    run_workspace_command,
+)
 
 app = Flask(__name__)
 logger = configure_logging()
@@ -632,6 +639,81 @@ def api_workspace_git():
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
     return jsonify({"git": snapshot.to_dict()})
+
+
+@app.route("/api/workspace/commands")
+def api_workspace_commands():
+    try:
+        commands = parse_workspace_commands(app.config.get("OPENCODE_WORKSPACE_COMMANDS", []))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"commands": [command.to_public_dict() for command in commands]})
+
+
+@app.route("/api/workspace/command-runs", methods=["GET"])
+def api_workspace_command_runs():
+    project_path = request.args.get("project_path", "").strip()
+    task_id = request.args.get("task_id", "").strip()
+    limit = _bounded_int_arg("limit", 20, minimum=1, maximum=100)
+    conn = get_workspace_db()
+    runs = fetch_command_runs(conn, project_path=project_path, task_id=task_id, limit=limit)
+    conn.close()
+    return jsonify({"runs": runs, "total": len(runs)})
+
+
+@app.route("/api/workspace/command-runs", methods=["POST"])
+def api_workspace_command_run_create():
+    payload = request.get_json(silent=True) or {}
+    project_path = str(payload.get("project_path") or "").strip()
+    command_key = str(payload.get("command_key") or "").strip()
+    task_id = str(payload.get("task_id") or "").strip()
+    if not project_path:
+        return jsonify({"error": "project_path 参数不能为空"}), 400
+    if not command_key:
+        return jsonify({"error": "command_key 参数不能为空"}), 400
+
+    try:
+        commands = parse_workspace_commands(app.config.get("OPENCODE_WORKSPACE_COMMANDS", []))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    command = find_workspace_command(commands, command_key)
+    if not command:
+        return jsonify({"error": "命令不在白名单中"}), 400
+
+    try:
+        result = run_workspace_command(
+            command,
+            project_path=project_path,
+            process_manager=process_manager,
+            timeout=int(app.config.get("OPENCODE_WORKSPACE_COMMAND_TIMEOUT", 120)),
+        )
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    conn = get_workspace_db()
+    run = record_command_run(
+        conn,
+        project_path=project_path,
+        task_id=task_id,
+        command_key=command.key,
+        command_label=command.label,
+        command_argv=command.argv,
+        cwd=result.cwd,
+        status=result.status,
+        exit_code=result.exit_code,
+        duration_ms=result.duration_ms,
+        output=result.output,
+        started_at=result.started_at,
+        finished_at=result.finished_at,
+    )
+    conn.close()
+    status_code = 201 if result.status == "success" else 200
+    return jsonify({"run": run}), status_code
 
 
 @app.route("/api/models")

@@ -22,9 +22,12 @@ import {
   getSessionStreamUrl,
   getSessions,
   getStats,
+  getWorkspaceCommandRuns,
+  getWorkspaceCommands,
   getWorkspaceGit,
   getWorkspaceProjects,
   getWorkspaceTasks,
+  runWorkspaceCommand,
   undoSession,
   updateWorkspaceTask,
   type DirectorySummary,
@@ -36,6 +39,8 @@ import {
   type SessionMessage,
   type SessionSummary,
   type StatsResponse,
+  type WorkspaceCommand,
+  type WorkspaceCommandRun,
   type WorkspaceGitSnapshot,
   type WorkspaceTask,
   type WorkspaceTaskStatus,
@@ -49,6 +54,11 @@ const WORKSPACE_TASK_STATUS_LABELS: Record<WorkspaceTaskStatus, string> = {
   in_progress: "In progress",
   todo: "Todo",
 };
+const COMMAND_RUN_STATUS_LABELS: Record<string, string> = {
+  failed: "Failed",
+  success: "Passed",
+  timeout: "Timed out",
+};
 
 interface DashboardData {
   stats: StatsResponse;
@@ -57,6 +67,8 @@ interface DashboardData {
   projects: ProjectWorkspace[];
   tasks: WorkspaceTask[];
   taskStatuses: WorkspaceTaskStatus[];
+  commands: WorkspaceCommand[];
+  commandRuns: WorkspaceCommandRun[];
   availableModels: string[];
   modelLoadError?: string;
 }
@@ -154,6 +166,10 @@ export default function App() {
   const [taskError, setTaskError] = useState("");
   const [taskBusyId, setTaskBusyId] = useState("");
   const [gitState, setGitState] = useState<GitState>({ status: "idle" });
+  const [commandKey, setCommandKey] = useState("");
+  const [commandTaskId, setCommandTaskId] = useState("");
+  const [commandBusy, setCommandBusy] = useState(false);
+  const [commandError, setCommandError] = useState("");
   const eventSourceRef = useRef<EventSource | null>(null);
   const newSessionAbortRef = useRef<AbortController | null>(null);
   const forkAbortRef = useRef<AbortController | null>(null);
@@ -163,12 +179,14 @@ export default function App() {
 
     async function load() {
       try {
-        const [stats, directories, sessions, projects, tasks, models] = await Promise.all([
+        const [stats, directories, sessions, projects, tasks, commands, commandRuns, models] = await Promise.all([
           getStats(),
           getDirectories(),
           getSessions({ limit: 200 }),
           getWorkspaceProjects(50),
           getWorkspaceTasks(),
+          getWorkspaceCommands(),
+          getWorkspaceCommandRuns({ limit: 20 }),
           getAvailableModels()
             .then((response) => ({ models: response.models, error: undefined }))
             .catch((error: unknown) => ({ models: [] as string[], error: errorText(error) })),
@@ -184,6 +202,8 @@ export default function App() {
             projects: projects.projects,
             tasks: tasks.tasks,
             taskStatuses: tasks.statuses,
+            commands: commands.commands,
+            commandRuns: commandRuns.runs,
             availableModels: models.models,
             modelLoadError: models.error,
           },
@@ -258,10 +278,25 @@ export default function App() {
     () => data?.tasks.filter((task) => task.project_path === selectedProject?.path) ?? [],
     [data?.tasks, selectedProject?.path],
   );
+  const selectedProjectCommandRuns = useMemo(
+    () => data?.commandRuns.filter((run) => run.project_path === selectedProject?.path) ?? [],
+    [data?.commandRuns, selectedProject?.path],
+  );
   const composerModelOptions = useMemo(
     () => deriveComposerModelOptions(visibleModelOptions, selectedSession?.model ?? ""),
     [selectedSession?.model, visibleModelOptions],
   );
+
+  useEffect(() => {
+    const commands = data?.commands ?? [];
+    if (commands.length === 0) {
+      setCommandKey("");
+      return;
+    }
+    if (!commandKey || !commands.some((command) => command.key === commandKey)) {
+      setCommandKey(commands[0].key);
+    }
+  }, [commandKey, data?.commands]);
 
   useEffect(() => {
     if (!selectedSession) {
@@ -349,8 +384,10 @@ export default function App() {
       getSessions({ limit: 200 }),
       getWorkspaceProjects(50),
       getWorkspaceTasks(),
+      getWorkspaceCommands(),
+      getWorkspaceCommandRuns({ limit: 20 }),
     ])
-      .then(([stats, directories, sessions, projects, tasks]) => {
+      .then(([stats, directories, sessions, projects, tasks, commands, commandRuns]) => {
         setLoadState((current) => {
           const previous = current.status === "ready" ? current.data : null;
           return {
@@ -362,6 +399,8 @@ export default function App() {
               projects: projects.projects,
               tasks: tasks.tasks,
               taskStatuses: tasks.statuses,
+              commands: commands.commands,
+              commandRuns: commandRuns.runs,
               availableModels: previous?.availableModels ?? [],
               modelLoadError: previous?.modelLoadError,
             },
@@ -374,6 +413,32 @@ export default function App() {
         setLoadState({ status: "error", message: errorText(error) });
         return [];
       });
+  }
+
+  async function runSelectedWorkspaceCommand() {
+    if (!selectedProject) {
+      setCommandError("Select a project before running a command.");
+      return;
+    }
+    if (!commandKey) {
+      setCommandError("No workspace command is configured.");
+      return;
+    }
+
+    setCommandBusy(true);
+    setCommandError("");
+    try {
+      await runWorkspaceCommand({
+        project_path: selectedProject.path,
+        command_key: commandKey,
+        task_id: commandTaskId,
+      });
+      await refreshDashboard();
+    } catch (error) {
+      setCommandError(errorText(error));
+    } finally {
+      setCommandBusy(false);
+    }
   }
 
   async function createTaskForSelectedProject() {
@@ -1122,6 +1187,21 @@ export default function App() {
                 onStatusChange={updateProjectTaskStatus}
               />
               <GitSnapshotPanel state={gitState} />
+              <ValidationRunsPanel
+                busy={commandBusy}
+                commandKey={commandKey}
+                commands={data.commands}
+                error={commandError}
+                runs={selectedProjectCommandRuns}
+                taskId={commandTaskId}
+                tasks={selectedProjectTasks}
+                onCommandChange={(value) => {
+                  setCommandKey(value);
+                  if (commandError) setCommandError("");
+                }}
+                onRun={runSelectedWorkspaceCommand}
+                onTaskChange={setCommandTaskId}
+              />
 
               <section className="detail-panel">
                 <div className="panel-heading">
@@ -1560,6 +1640,104 @@ function GitSnapshotPanel({ state }: { state: GitState }) {
           </div>
         </>
       )}
+    </section>
+  );
+}
+
+function ValidationRunsPanel({
+  busy,
+  commandKey,
+  commands,
+  error,
+  runs,
+  taskId,
+  tasks,
+  onCommandChange,
+  onRun,
+  onTaskChange,
+}: {
+  busy: boolean;
+  commandKey: string;
+  commands: WorkspaceCommand[];
+  error: string;
+  runs: WorkspaceCommandRun[];
+  taskId: string;
+  tasks: WorkspaceTask[];
+  onCommandChange: (value: string) => void;
+  onRun: () => void;
+  onTaskChange: (value: string) => void;
+}) {
+  return (
+    <section className="detail-panel validation-panel" aria-label="Validation runs">
+      <div className="panel-heading">
+        <h3>Validation Runs</h3>
+        <span>{formatNumber(runs.length)} recent</span>
+      </div>
+      {commands.length > 0 ? (
+        <div className="validation-controls">
+          <label>
+            <span>Command</span>
+            <select
+              aria-label="Workspace command"
+              disabled={busy}
+              value={commandKey}
+              onChange={(event) => onCommandChange(event.target.value)}
+            >
+              {commands.map((command) => (
+                <option key={command.key} value={command.key}>
+                  {command.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Task link</span>
+            <select
+              aria-label="Validation task link"
+              disabled={busy}
+              value={taskId}
+              onChange={(event) => onTaskChange(event.target.value)}
+            >
+              <option value="">No task link</option>
+              {tasks.map((task) => (
+                <option key={task.id} value={task.id}>
+                  {task.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button disabled={busy || !commandKey} type="button" onClick={onRun}>
+            {busy ? "Running" : "Run"}
+          </button>
+        </div>
+      ) : (
+        <PanelStatus label="No command presets configured" />
+      )}
+      {error && (
+        <p className="validation-error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="validation-run-list">
+        {runs.length > 0 ? (
+          runs.slice(0, 5).map((run) => (
+            <article className={`validation-run-row ${run.status}`} key={run.id}>
+              <div className="validation-run-header">
+                <strong>{run.command_label}</strong>
+                <span>{COMMAND_RUN_STATUS_LABELS[run.status] ?? run.status}</span>
+              </div>
+              <div className="validation-run-meta">
+                <span>{run.exit_code === null ? "no exit code" : `exit ${run.exit_code}`}</span>
+                <span>{formatDurationMs(run.duration_ms)}</span>
+                {run.task_id && <span>linked task</span>}
+              </div>
+              {run.output && <pre>{run.output.trim() || "(empty output)"}</pre>}
+            </article>
+          ))
+        ) : (
+          <PanelStatus label="No validation runs yet" />
+        )}
+      </div>
     </section>
   );
 }

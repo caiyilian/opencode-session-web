@@ -22,6 +22,8 @@ def test_final_user_workflow_routes_remain_registered():
         "/api/workspace/tasks": {"GET", "POST"},
         "/api/workspace/tasks/<task_id>": {"PATCH"},
         "/api/workspace/git": {"GET"},
+        "/api/workspace/commands": {"GET"},
+        "/api/workspace/command-runs": {"GET", "POST"},
         "/api/models": {"GET"},
         "/api/available-models": {"GET"},
         "/api/sessions/compare": {"GET"},
