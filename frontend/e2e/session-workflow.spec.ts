@@ -19,6 +19,15 @@ test("browses, searches, opens a session, and keeps composer reachable", async (
   await expect(page.locator(".compare-panel .panel-status")).toHaveAttribute("role", "status");
   await expect(page.locator(".workspace-panel")).toContainText("Workspace");
   await expect(page.locator(".workspace-panel")).toContainText("Active project");
+  await expect(page.locator(".task-panel")).toContainText("Project Tasks");
+
+  if (!isMobile) {
+    await page.locator(".task-create-form input").fill("Prepare workspace task");
+    await page.locator(".task-create-form button").click();
+    await expect(page.locator(".task-row")).toContainText("Prepare workspace task");
+    await page.locator(".task-row select").selectOption("done");
+    await expect(page.locator(".task-row")).toContainText("Done");
+  }
 
   await search.fill("__missing_session__");
   await expect(page.locator(".session-list .status-block")).toHaveText("No sessions");

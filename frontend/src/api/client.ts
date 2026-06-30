@@ -8,6 +8,9 @@ import type {
   StatsResponse,
   UsedModelsResponse,
   WorkspaceProjectsResponse,
+  WorkspaceTaskResponse,
+  WorkspaceTasksResponse,
+  WorkspaceTaskStatus,
 } from "./types";
 
 export class ApiError extends Error {
@@ -43,6 +46,27 @@ export interface NewSessionStreamRequest {
 export interface ForkSessionStreamRequest {
   message: string;
   model?: string;
+}
+
+export interface WorkspaceTasksQuery {
+  project_path?: string;
+  status?: WorkspaceTaskStatus;
+}
+
+export interface CreateWorkspaceTaskRequest {
+  title: string;
+  description?: string;
+  project_path?: string;
+  status?: WorkspaceTaskStatus;
+  linked_session_ids?: string[];
+}
+
+export interface UpdateWorkspaceTaskRequest {
+  title?: string;
+  description?: string;
+  project_path?: string;
+  status?: WorkspaceTaskStatus;
+  linked_session_ids?: string[];
 }
 
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -122,6 +146,24 @@ export function getWorkspaceProjects(limit = 50) {
   return apiRequest<WorkspaceProjectsResponse>(`/api/workspace/projects${queryString({ limit })}`);
 }
 
+export function getWorkspaceTasks(query: WorkspaceTasksQuery = {}) {
+  return apiRequest<WorkspaceTasksResponse>(`/api/workspace/tasks${queryString(query)}`);
+}
+
+export function createWorkspaceTask(payload: CreateWorkspaceTaskRequest) {
+  return apiRequest<WorkspaceTaskResponse>("/api/workspace/tasks", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateWorkspaceTask(taskId: string, payload: UpdateWorkspaceTaskRequest) {
+  return apiRequest<WorkspaceTaskResponse>(`/api/workspace/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function deleteSession(sessionId: string) {
   return apiRequest<MutationResponse>(`/api/sessions/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
@@ -149,7 +191,7 @@ function errorMessage(payload: unknown): string {
   return "";
 }
 
-function queryString(query: SessionsQuery): string {
+function queryString(query: SessionsQuery | WorkspaceTasksQuery): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && value !== null && value !== "") {

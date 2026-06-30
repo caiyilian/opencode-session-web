@@ -196,6 +196,7 @@ def main() -> None:
     flask_app = webapp.create_app(
         {
             "OPENCODE_DB_PATH": str(db_path),
+            "OPENCODE_WORKSPACE_DB_PATH": str(temp_dir / "workspace.db"),
             "OPENCODE_USE_FRONTEND_DIST": True,
             "OPENCODE_FRONTEND_DIST_DIR": str(ROOT / "frontend" / "dist"),
             "OPENCODE_WEB_LOG_DIR": str(temp_dir / "logs"),

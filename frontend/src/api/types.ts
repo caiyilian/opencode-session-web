@@ -208,3 +208,26 @@ export interface WorkspaceProjectsResponse {
   projects: ProjectWorkspace[];
   total: number;
 }
+
+export type WorkspaceTaskStatus = "todo" | "in_progress" | "done" | "blocked" | "archived";
+
+export interface WorkspaceTask {
+  id: string;
+  title: string;
+  description: string;
+  project_path: string;
+  status: WorkspaceTaskStatus;
+  linked_session_ids: string[];
+  created_at: number;
+  updated_at: number;
+}
+
+export interface WorkspaceTasksResponse {
+  tasks: WorkspaceTask[];
+  statuses: WorkspaceTaskStatus[];
+  total: number;
+}
+
+export interface WorkspaceTaskResponse {
+  task: WorkspaceTask;
+}

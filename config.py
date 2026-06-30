@@ -6,6 +6,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class AppConfig:
     db_path: str
+    workspace_db_path: str
     opencode_stream_timeout: int
     opencode_idle_timeout: int
     log_dir: str
@@ -17,6 +18,12 @@ class AppConfig:
         return cls(
             db_path=os.path.expanduser(
                 os.environ.get("OPENCODE_DB_PATH", "~/.local/share/opencode/opencode.db")
+            ),
+            workspace_db_path=os.path.expanduser(
+                os.environ.get(
+                    "OPENCODE_WORKSPACE_DB_PATH",
+                    str(Path.home() / ".opencode-session-web" / "workspace.db"),
+                )
             ),
             opencode_stream_timeout=int(os.environ.get("OPENCODE_STREAM_TIMEOUT", "600")),
             opencode_idle_timeout=int(os.environ.get("OPENCODE_IDLE_TIMEOUT", "25")),
@@ -35,6 +42,7 @@ class AppConfig:
     def to_flask_config(self) -> dict:
         return {
             "OPENCODE_DB_PATH": self.db_path,
+            "OPENCODE_WORKSPACE_DB_PATH": self.workspace_db_path,
             "OPENCODE_STREAM_TIMEOUT": self.opencode_stream_timeout,
             "OPENCODE_IDLE_TIMEOUT": self.opencode_idle_timeout,
             "OPENCODE_WEB_LOG_DIR": self.log_dir,

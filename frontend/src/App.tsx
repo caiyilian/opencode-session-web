@@ -14,6 +14,7 @@ import {
   compareSessions,
   createForkSessionStream,
   createNewSessionStream,
+  createWorkspaceTask,
   deleteSession,
   getAvailableModels,
   getDirectories,
@@ -22,7 +23,9 @@ import {
   getSessions,
   getStats,
   getWorkspaceProjects,
+  getWorkspaceTasks,
   undoSession,
+  updateWorkspaceTask,
   type DirectorySummary,
   type CompareResponse,
   type CompareSession,
@@ -32,15 +35,26 @@ import {
   type SessionMessage,
   type SessionSummary,
   type StatsResponse,
+  type WorkspaceTask,
+  type WorkspaceTaskStatus,
 } from "./api";
 
 const BLOCKED_PROVIDERS_STORAGE_KEY = "blockedProviders";
+const WORKSPACE_TASK_STATUS_LABELS: Record<WorkspaceTaskStatus, string> = {
+  archived: "Archived",
+  blocked: "Blocked",
+  done: "Done",
+  in_progress: "In progress",
+  todo: "Todo",
+};
 
 interface DashboardData {
   stats: StatsResponse;
   directories: DirectorySummary[];
   sessions: SessionSummary[];
   projects: ProjectWorkspace[];
+  tasks: WorkspaceTask[];
+  taskStatuses: WorkspaceTaskStatus[];
   availableModels: string[];
   modelLoadError?: string;
 }
@@ -128,6 +142,9 @@ export default function App() {
   const [forkModel, setForkModel] = useState("");
   const [forkError, setForkError] = useState("");
   const [forkDraft, setForkDraft] = useState<StreamDraft | null>(null);
+  const [taskDraftTitle, setTaskDraftTitle] = useState("");
+  const [taskError, setTaskError] = useState("");
+  const [taskBusyId, setTaskBusyId] = useState("");
   const eventSourceRef = useRef<EventSource | null>(null);
   const newSessionAbortRef = useRef<AbortController | null>(null);
   const forkAbortRef = useRef<AbortController | null>(null);
@@ -137,11 +154,12 @@ export default function App() {
 
     async function load() {
       try {
-        const [stats, directories, sessions, projects, models] = await Promise.all([
+        const [stats, directories, sessions, projects, tasks, models] = await Promise.all([
           getStats(),
           getDirectories(),
           getSessions({ limit: 200 }),
           getWorkspaceProjects(50),
+          getWorkspaceTasks(),
           getAvailableModels()
             .then((response) => ({ models: response.models, error: undefined }))
             .catch((error: unknown) => ({ models: [] as string[], error: errorText(error) })),
@@ -155,6 +173,8 @@ export default function App() {
             directories: directories.directories,
             sessions: sessions.sessions,
             projects: projects.projects,
+            tasks: tasks.tasks,
+            taskStatuses: tasks.statuses,
             availableModels: models.models,
             modelLoadError: models.error,
           },
@@ -225,6 +245,10 @@ export default function App() {
       null,
     [browseState.selectedDirectory, data?.projects, selectedSession?.directory],
   );
+  const selectedProjectTasks = useMemo(
+    () => data?.tasks.filter((task) => task.project_path === selectedProject?.path) ?? [],
+    [data?.tasks, selectedProject?.path],
+  );
   const composerModelOptions = useMemo(
     () => deriveComposerModelOptions(visibleModelOptions, selectedSession?.model ?? ""),
     [selectedSession?.model, visibleModelOptions],
@@ -293,8 +317,9 @@ export default function App() {
       getDirectories(),
       getSessions({ limit: 200 }),
       getWorkspaceProjects(50),
+      getWorkspaceTasks(),
     ])
-      .then(([stats, directories, sessions, projects]) => {
+      .then(([stats, directories, sessions, projects, tasks]) => {
         setLoadState((current) => {
           const previous = current.status === "ready" ? current.data : null;
           return {
@@ -304,6 +329,8 @@ export default function App() {
               directories: directories.directories,
               sessions: sessions.sessions,
               projects: projects.projects,
+              tasks: tasks.tasks,
+              taskStatuses: tasks.statuses,
               availableModels: previous?.availableModels ?? [],
               modelLoadError: previous?.modelLoadError,
             },
@@ -316,6 +343,47 @@ export default function App() {
         setLoadState({ status: "error", message: errorText(error) });
         return [];
       });
+  }
+
+  async function createTaskForSelectedProject() {
+    const title = taskDraftTitle.trim();
+    if (!selectedProject) {
+      setTaskError("Select a project before creating a task.");
+      return;
+    }
+    if (!title) {
+      setTaskError("Enter a task title.");
+      return;
+    }
+
+    setTaskBusyId("create");
+    setTaskError("");
+    try {
+      await createWorkspaceTask({
+        title,
+        project_path: selectedProject.path,
+        linked_session_ids: selectedSession ? [selectedSession.id] : [],
+      });
+      setTaskDraftTitle("");
+      await refreshDashboard();
+    } catch (error) {
+      setTaskError(errorText(error));
+    } finally {
+      setTaskBusyId("");
+    }
+  }
+
+  async function updateProjectTaskStatus(task: WorkspaceTask, status: WorkspaceTaskStatus) {
+    setTaskBusyId(task.id);
+    setTaskError("");
+    try {
+      await updateWorkspaceTask(task.id, { status });
+      await refreshDashboard();
+    } catch (error) {
+      setTaskError(errorText(error));
+    } finally {
+      setTaskBusyId("");
+    }
   }
 
   async function undoSelectedSession() {
@@ -1008,6 +1076,20 @@ export default function App() {
                 onSelectProject={(path) => dispatch({ type: "selectDirectory", value: path })}
                 onSelectSession={(sessionId) => dispatch({ type: "selectSession", value: sessionId })}
               />
+              <ProjectTasksPanel
+                busyId={taskBusyId}
+                draftTitle={taskDraftTitle}
+                error={taskError}
+                project={selectedProject}
+                statuses={data.taskStatuses}
+                tasks={selectedProjectTasks}
+                onDraftTitleChange={(value) => {
+                  setTaskDraftTitle(value);
+                  if (taskError) setTaskError("");
+                }}
+                onCreate={createTaskForSelectedProject}
+                onStatusChange={updateProjectTaskStatus}
+              />
 
               <section className="detail-panel">
                 <div className="panel-heading">
@@ -1283,6 +1365,104 @@ function WorkspacePanel({
       ) : (
         <PanelStatus label="No project activity" />
       )}
+    </section>
+  );
+}
+
+function ProjectTasksPanel({
+  busyId,
+  draftTitle,
+  error,
+  project,
+  statuses,
+  tasks,
+  onCreate,
+  onDraftTitleChange,
+  onStatusChange,
+}: {
+  busyId: string;
+  draftTitle: string;
+  error: string;
+  project: ProjectWorkspace | null;
+  statuses: WorkspaceTaskStatus[];
+  tasks: WorkspaceTask[];
+  onCreate: () => void;
+  onDraftTitleChange: (value: string) => void;
+  onStatusChange: (task: WorkspaceTask, status: WorkspaceTaskStatus) => void;
+}) {
+  const visibleStatuses = statuses.filter((status) => status !== "archived");
+  const counts = visibleStatuses.map((status) => ({
+    status,
+    count: tasks.filter((task) => task.status === status).length,
+  }));
+
+  return (
+    <section className="detail-panel task-panel" aria-label="Project tasks">
+      <div className="panel-heading">
+        <h3>Project Tasks</h3>
+        <span>{formatNumber(tasks.length)} tasks</span>
+      </div>
+      <form
+        className="task-create-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onCreate();
+        }}
+      >
+        <input
+          disabled={!project || busyId === "create"}
+          placeholder={project ? "Add a workspace task" : "Select a project first"}
+          value={draftTitle}
+          onChange={(event) => onDraftTitleChange(event.target.value)}
+        />
+        <button disabled={!project || busyId === "create"} type="submit">
+          {busyId === "create" ? "Adding" : "Add"}
+        </button>
+      </form>
+      {error && (
+        <p className="task-error" role="alert">
+          {error}
+        </p>
+      )}
+      {counts.length > 0 && (
+        <div className="task-status-strip" aria-label="Task status summary">
+          {counts.map((item) => (
+            <span key={item.status}>
+              {WORKSPACE_TASK_STATUS_LABELS[item.status]} · {formatNumber(item.count)}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="task-list">
+        {tasks.length > 0 ? (
+          tasks.map((task) => (
+            <article className={`task-row ${task.status}`} key={task.id}>
+              <div>
+                <h4>{task.title}</h4>
+                <p>
+                  {WORKSPACE_TASK_STATUS_LABELS[task.status]} · {task.linked_session_ids.length} linked sessions
+                </p>
+              </div>
+              <select
+                aria-label={`Set status for ${task.title}`}
+                disabled={busyId === task.id}
+                value={task.status}
+                onChange={(event) =>
+                  onStatusChange(task, event.target.value as WorkspaceTaskStatus)
+                }
+              >
+                {visibleStatuses.map((status) => (
+                  <option key={status} value={status}>
+                    {WORKSPACE_TASK_STATUS_LABELS[status]}
+                  </option>
+                ))}
+              </select>
+            </article>
+          ))
+        ) : (
+          <PanelStatus label={project ? "No tasks for this project" : "No project selected"} />
+        )}
+      </div>
     </section>
   );
 }
