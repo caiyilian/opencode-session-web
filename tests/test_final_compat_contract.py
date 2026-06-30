@@ -18,6 +18,7 @@ def test_final_user_workflow_routes_remain_registered():
         "/api/sessions/<session_id>": {"GET", "DELETE"},
         "/api/messages/<message_id>": {"GET"},
         "/api/directories": {"GET"},
+        "/api/workspace/projects": {"GET"},
         "/api/models": {"GET"},
         "/api/available-models": {"GET"},
         "/api/sessions/compare": {"GET"},

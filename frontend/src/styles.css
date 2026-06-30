@@ -615,6 +615,68 @@ textarea:focus-visible {
   overflow: hidden;
 }
 
+.workspace-panel {
+  overflow: hidden;
+}
+
+.workspace-project-header {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.workspace-project-header h4,
+.workspace-project-header p {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.workspace-project-header h4 {
+  color: #1f2937;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.workspace-project-header p {
+  margin-top: 4px;
+  color: #697385;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.workspace-project-select {
+  width: 100%;
+  height: 34px;
+  min-width: 0;
+  border: 1px solid #cfd6e2;
+  border-radius: 6px;
+  padding: 0 9px;
+  color: #202124;
+  background: #ffffff;
+}
+
+.workspace-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  border-top: 1px solid #e3e8f0;
+  padding: 12px 14px 0;
+}
+
+.workspace-recent {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #e3e8f0;
+  padding: 12px 14px 14px;
+}
+
+.workspace-recent h4 {
+  color: #374151;
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .stats-panel {
   grid-column: 1 / -1;
 }
@@ -877,6 +939,10 @@ textarea:focus-visible {
 .detail-list {
   margin: 0;
   padding: 4px 14px 14px;
+}
+
+.detail-list.compact {
+  padding-top: 8px;
 }
 
 .detail-list div {

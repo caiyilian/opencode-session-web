@@ -207,6 +207,27 @@ def test_sessions_list_schema_compatible(client):
     assert by_id["ses_old"]["cost"] + by_id["ses_new"]["cost"] == pytest.approx(expected["cost"])
 
 
+def test_workspace_projects_schema_compatible(client):
+    test_client, old_usage_columns = client
+    expected = _expected_usage(old_usage_columns)
+
+    response = test_client.get("/api/workspace/projects?limit=10")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total"] == 2
+    by_path = {item["path"]: item for item in payload["projects"]}
+    assert set(by_path) == {"C:/repo/one", "C:/repo/two"}
+    assert by_path["C:/repo/two"]["name"] == "two"
+    assert by_path["C:/repo/two"]["session_count"] == 1
+    assert by_path["C:/repo/two"]["message_count"] == 1
+    assert by_path["C:/repo/one"]["tokens_input"] + by_path["C:/repo/two"]["tokens_input"] == expected["input"]
+    assert by_path["C:/repo/one"]["tokens_output"] + by_path["C:/repo/two"]["tokens_output"] == expected["output"]
+    assert by_path["C:/repo/one"]["cost"] + by_path["C:/repo/two"]["cost"] == pytest.approx(expected["cost"])
+    assert by_path["C:/repo/two"]["recent_sessions"][0]["id"] == "ses_new"
+    assert by_path["C:/repo/two"]["top_models"]
+
+
 def test_session_detail_and_compare_include_usage(client):
     test_client, old_usage_columns = client
     expected = _expected_usage(old_usage_columns)
