@@ -8,6 +8,7 @@ import type {
   StatsResponse,
   UsedModelsResponse,
   WorkspaceProjectsResponse,
+  WorkspaceTaskEventsResponse,
   WorkspaceTaskResponse,
   WorkspaceTaskReportResponse,
   WorkspaceTasksResponse,
@@ -80,6 +81,10 @@ export interface UpdateWorkspaceTaskRequest {
 export interface WorkspaceCommandRunsQuery {
   project_path?: string;
   task_id?: string;
+  limit?: number;
+}
+
+export interface WorkspaceTaskEventsQuery {
   limit?: number;
 }
 
@@ -190,6 +195,12 @@ export function getWorkspaceTaskReport(taskId: string) {
   );
 }
 
+export function getWorkspaceTaskEvents(taskId: string, query: WorkspaceTaskEventsQuery = {}) {
+  return apiRequest<WorkspaceTaskEventsResponse>(
+    `/api/workspace/tasks/${encodeURIComponent(taskId)}/events${queryString(query)}`,
+  );
+}
+
 export function getWorkspaceGit(projectPath: string) {
   return apiRequest<WorkspaceGitResponse>(
     `/api/workspace/git${queryString({ project_path: projectPath })}`,
@@ -241,7 +252,12 @@ function errorMessage(payload: unknown): string {
 }
 
 function queryString(
-  query: SessionsQuery | WorkspaceTasksQuery | WorkspaceCommandRunsQuery | { project_path: string },
+  query:
+    | SessionsQuery
+    | WorkspaceTasksQuery
+    | WorkspaceCommandRunsQuery
+    | WorkspaceTaskEventsQuery
+    | { project_path: string },
 ): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {

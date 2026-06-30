@@ -232,6 +232,20 @@ export interface WorkspaceTaskResponse {
   task: WorkspaceTask;
 }
 
+export interface WorkspaceTaskEvent {
+  id: string;
+  task_id: string;
+  event_type: string;
+  title: string;
+  payload: Record<string, unknown>;
+  created_at: number;
+}
+
+export interface WorkspaceTaskEventsResponse {
+  events: WorkspaceTaskEvent[];
+  total: number;
+}
+
 export interface WorkspaceTaskReportSession {
   id: string;
   title: string;
@@ -310,6 +324,7 @@ export interface WorkspaceTaskReport {
   task: WorkspaceTask;
   linked_sessions: WorkspaceTaskReportSession[];
   command_runs: WorkspaceCommandRun[];
+  events: WorkspaceTaskEvent[];
   git: WorkspaceGitSnapshot | null;
   markdown: string;
 }

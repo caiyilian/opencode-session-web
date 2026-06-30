@@ -46,6 +46,7 @@ def test_frontend_api_client_scaffold_exports_core_helpers():
         "getWorkspaceTasks",
         "createWorkspaceTask",
         "updateWorkspaceTask",
+        "getWorkspaceTaskEvents",
         "getWorkspaceTaskReport",
         "getWorkspaceGit",
         "getWorkspaceCommands",
@@ -61,6 +62,7 @@ def test_frontend_api_client_scaffold_exports_core_helpers():
         "MessagePart",
         "ProjectWorkspace",
         "WorkspaceTask",
+        "WorkspaceTaskEvent",
         "WorkspaceTaskReport",
         "WorkspaceGitSnapshot",
         "WorkspaceCommand",
@@ -91,6 +93,8 @@ def test_react_app_loads_core_api_data():
     assert "ProjectTasksPanel" in app_source
     assert "Project Tasks" in app_source
     assert "Task Report" in app_source
+    assert "Execution Timeline" in app_source
+    assert "task-event-list" in app_source
     assert "task-report-preview" in app_source
     assert "task-opencode-actions" in app_source
     assert "buildWorkspaceTaskMessage" in app_source

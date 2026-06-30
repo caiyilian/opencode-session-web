@@ -44,6 +44,7 @@ import {
   type WorkspaceCommandRun,
   type WorkspaceGitSnapshot,
   type WorkspaceTask,
+  type WorkspaceTaskEvent,
   type WorkspaceTaskReport,
   type WorkspaceTaskStatus,
 } from "./api";
@@ -1745,12 +1746,39 @@ function ProjectTasksPanel({
         <div className="task-report-preview">
           <div className="task-report-header">
             <h4>Task Report</h4>
-            <span>{formatNumber(reportState.data.command_runs.length)} runs</span>
+            <span>
+              {formatNumber(reportState.data.command_runs.length)} runs · {formatNumber(reportState.data.events.length)} events
+            </span>
           </div>
           <pre>{reportState.data.markdown}</pre>
+          <TaskEventTimeline events={reportState.data.events} />
         </div>
       )}
     </section>
+  );
+}
+
+function TaskEventTimeline({ events }: { events: WorkspaceTaskEvent[] }) {
+  return (
+    <div className="task-event-list" aria-label="Task execution timeline">
+      <h4>Execution Timeline</h4>
+      {events.length > 0 ? (
+        events.slice(0, 8).map((event) => (
+          <article className="task-event-row" key={event.id}>
+            <div>
+              <strong>{event.title}</strong>
+              <span>{event.event_type}</span>
+            </div>
+            <p>
+              {formatCompareTime(event.created_at) || "Unknown time"}
+              {taskEventGitSummary(event)}
+            </p>
+          </article>
+        ))
+      ) : (
+        <PanelStatus label="No task events recorded" />
+      )}
+    </div>
   );
 }
 
@@ -2955,6 +2983,24 @@ function buildWorkspaceTaskMessage(task: WorkspaceTask) {
   }
   lines.push("", "Work on this task, keep the change focused, and summarize validation steps.");
   return lines.join("\n");
+}
+
+function taskEventGitSummary(event: WorkspaceTaskEvent) {
+  const git = objectValue(event.payload.git);
+  if (!git) return "";
+  if (git.is_git_repo === true) {
+    const branch = stringValue(git.branch) || "detached";
+    const dirtyCount = numberValue(git.dirty_count) ?? 0;
+    return ` · ${branch}, ${dirtyCount} dirty files`;
+  }
+  if (typeof git.error === "string" && git.error) return ` · ${git.error}`;
+  return "";
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function applyStreamEvent(

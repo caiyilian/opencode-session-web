@@ -7,6 +7,7 @@ def build_task_report(
     linked_sessions: list[dict[str, Any]],
     command_runs: list[dict[str, Any]],
     git_snapshot: dict[str, Any] | None,
+    task_events: list[dict[str, Any]] | None = None,
 ) -> str:
     lines = [
         f"# {task['title']}",
@@ -60,5 +61,17 @@ def build_task_report(
                 lines.extend(["", "```text", output[-2000:], "```", ""])
     else:
         lines.append("- No validation runs linked to this task")
+
+    lines.extend(["", "## Task Timeline"])
+    if task_events:
+        for event in task_events[:10]:
+            payload = event.get("payload") or {}
+            git = payload.get("git") if isinstance(payload, dict) else None
+            detail = ""
+            if isinstance(git, dict) and git.get("is_git_repo"):
+                detail = f" ({git.get('branch') or 'detached'}, {git.get('dirty_count', 0)} dirty files)"
+            lines.append(f"- {event['title']} [{event['event_type']}]{detail}")
+    else:
+        lines.append("- No task events recorded")
 
     return "\n".join(lines).strip() + "\n"

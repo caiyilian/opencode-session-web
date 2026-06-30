@@ -69,10 +69,14 @@ def test_continue_session_stream_links_workspace_task(monkeypatch, tmp_path):
             buffered=True,
         )
         linked_task = client.get(f"/api/workspace/tasks?project_path={tmp_path}").get_json()["tasks"][0]
+        events = client.get(f"/api/workspace/tasks/{task['id']}/events").get_json()["events"]
 
     assert response.status_code == 200
     assert "event: done" in response.get_data(as_text=True)
     assert "ses_1" in linked_task["linked_session_ids"]
+    assert events[0]["event_type"] == "opencode_session_linked"
+    assert events[0]["payload"]["source"] == "continue"
+    assert events[0]["payload"]["session_id"] == "ses_1"
 
 
 def test_new_session_stream_links_workspace_task(monkeypatch, tmp_path):
@@ -96,10 +100,14 @@ def test_new_session_stream_links_workspace_task(monkeypatch, tmp_path):
             buffered=True,
         )
         linked_task = client.get(f"/api/workspace/tasks?project_path={tmp_path}").get_json()["tasks"][0]
+        events = client.get(f"/api/workspace/tasks/{task['id']}/events").get_json()["events"]
 
     assert response.status_code == 200
     assert "ses_new" in response.get_data(as_text=True)
     assert "ses_new" in linked_task["linked_session_ids"]
+    assert events[0]["event_type"] == "opencode_session_linked"
+    assert events[0]["payload"]["source"] == "new"
+    assert events[0]["payload"]["session_id"] == "ses_new"
     assert manager.terminated == []
     assert manager.unregistered == [process]
 
@@ -128,10 +136,14 @@ def test_fork_session_stream_links_workspace_task(monkeypatch, tmp_path):
             buffered=True,
         )
         linked_task = client.get(f"/api/workspace/tasks?project_path={tmp_path}").get_json()["tasks"][0]
+        events = client.get(f"/api/workspace/tasks/{task['id']}/events").get_json()["events"]
 
     assert response.status_code == 200
     assert "ses_fork" in response.get_data(as_text=True)
     assert "ses_fork" in linked_task["linked_session_ids"]
+    assert events[0]["event_type"] == "opencode_session_linked"
+    assert events[0]["payload"]["source"] == "fork"
+    assert events[0]["payload"]["session_id"] == "ses_fork"
     assert manager.terminated == []
     assert manager.unregistered == [process]
 

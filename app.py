@@ -32,8 +32,10 @@ from repositories.workspace_tasks import (
     connect_workspace_db,
     create_task,
     fetch_command_runs,
+    fetch_task_events,
     fetch_tasks,
     get_task,
+    record_task_event,
     record_command_run,
     update_task,
 )
@@ -633,31 +635,48 @@ def api_workspace_task_report(task_id):
         workspace_conn.close()
         return jsonify({"error": "任务不存在"}), 404
     command_runs = fetch_command_runs(workspace_conn, task_id=task_id, limit=10)
-    workspace_conn.close()
-
     linked_sessions = _fetch_linked_sessions(task["linked_session_ids"])
-    git_snapshot = None
-    if task["project_path"]:
-        try:
-            git_snapshot = read_git_snapshot(task["project_path"]).to_dict()
-        except Exception as exc:
-            git_snapshot = {"is_git_repo": False, "error": str(exc)}
+    git_snapshot = _read_task_git_snapshot(task)
+    record_task_event(
+        workspace_conn,
+        task_id=task_id,
+        event_type="task_report_generated",
+        title="Task report generated",
+        payload={"git": git_snapshot},
+    )
+    task_events = fetch_task_events(workspace_conn, task_id, limit=25)
+    workspace_conn.close()
 
     markdown = build_task_report(
         task=task,
         linked_sessions=linked_sessions,
         command_runs=command_runs,
         git_snapshot=git_snapshot,
+        task_events=task_events,
     )
     return jsonify({
         "report": {
             "task": task,
             "linked_sessions": linked_sessions,
             "command_runs": command_runs,
+            "events": task_events,
             "git": git_snapshot,
             "markdown": markdown,
         }
     })
+
+
+@app.route("/api/workspace/tasks/<task_id>/events", methods=["GET"])
+def api_workspace_task_events(task_id):
+    limit = _bounded_int_arg("limit", 50, minimum=1, maximum=100)
+    conn = get_workspace_db()
+    task = get_task(conn, task_id)
+    if not task:
+        conn.close()
+        return jsonify({"error": "任务不存在"}), 404
+    events = fetch_task_events(conn, task_id, limit=limit)
+    conn.close()
+    return jsonify({"events": events, "total": len(events)})
 
 
 def _fetch_linked_sessions(session_ids):
@@ -697,7 +716,16 @@ def _workspace_task_exists(task_id):
         conn.close()
 
 
-def _link_workspace_task_session(task_id, session_id):
+def _read_task_git_snapshot(task):
+    if not task or not task.get("project_path"):
+        return None
+    try:
+        return read_git_snapshot(task["project_path"]).to_dict()
+    except Exception as exc:
+        return {"is_git_repo": False, "error": str(exc)}
+
+
+def _link_workspace_task_session(task_id, session_id, source="opencode"):
     if not task_id or not session_id:
         return False
     conn = get_workspace_db()
@@ -709,6 +737,22 @@ def _link_workspace_task_session(task_id, session_id):
         if session_id not in linked_ids:
             linked_ids.append(session_id)
             update_task(conn, task_id, {"linked_session_ids": linked_ids})
+        source_labels = {
+            "continue": "OpenCode continue completed",
+            "new": "OpenCode new session completed",
+            "fork": "OpenCode fork completed",
+        }
+        record_task_event(
+            conn,
+            task_id=task_id,
+            event_type="opencode_session_linked",
+            title=source_labels.get(source, "OpenCode session linked"),
+            payload={
+                "session_id": session_id,
+                "source": source,
+                "git": _read_task_git_snapshot(task),
+            },
+        )
         return True
     finally:
         conn.close()
@@ -802,6 +846,24 @@ def api_workspace_command_run_create():
         started_at=result.started_at,
         finished_at=result.finished_at,
     )
+    if task_id:
+        task = get_task(conn, task_id)
+        if task:
+            record_task_event(
+                conn,
+                task_id=task_id,
+                event_type="validation_run_completed",
+                title=f"Validation {command.label} {result.status}",
+                payload={
+                    "run_id": run["id"],
+                    "command_key": command.key,
+                    "command_label": command.label,
+                    "status": result.status,
+                    "exit_code": result.exit_code,
+                    "duration_ms": result.duration_ms,
+                    "git": _read_task_git_snapshot(task),
+                },
+            )
     conn.close()
     status_code = 201 if result.status == "success" else 200
     return jsonify({"run": run}), status_code
@@ -1071,7 +1133,7 @@ def api_session_stream(session_id):
             yield sse.stream_error(str(e))
         finally:
             if not had_error:
-                _link_workspace_task_session(task_id, session_id)
+                _link_workspace_task_session(task_id, session_id, source="continue")
                 yield sse.done({"session_id": session_id, "task_id": task_id})
 
     return Response(
@@ -1250,7 +1312,7 @@ def api_session_new():
                 stderr_thread2.join(timeout=2)
             if not had_error:
                 if new_session_id:
-                    _link_workspace_task_session(task_id, new_session_id)
+                    _link_workspace_task_session(task_id, new_session_id, source="new")
                 yield sse.done({"session_id": new_session_id or "", "task_id": task_id})
 
     return Response(
@@ -1544,7 +1606,7 @@ def api_session_fork(session_id):
                 stderr_thread.join(timeout=2)
             if not had_error:
                 if new_session_id:
-                    _link_workspace_task_session(task_id, new_session_id)
+                    _link_workspace_task_session(task_id, new_session_id, source="fork")
                 yield sse.done({"session_id": new_session_id or "", "task_id": task_id})
 
     return Response(

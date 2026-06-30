@@ -46,15 +46,21 @@ def test_workspace_task_report_includes_sessions_and_validation_runs(tmp_path):
         assert run.status_code == 201
 
         report = client.get(f"/api/workspace/tasks/{task['id']}/report")
+        events = client.get(f"/api/workspace/tasks/{task['id']}/events")
 
     assert report.status_code == 200
     payload = report.get_json()["report"]
     markdown = payload["markdown"]
     assert payload["linked_sessions"][0]["id"] == "ses_report"
     assert payload["command_runs"][0]["command_key"] == "check"
+    assert any(event["event_type"] == "validation_run_completed" for event in payload["events"])
+    assert any(event["event_type"] == "task_report_generated" for event in payload["events"])
     assert "# Reportable task" in markdown
     assert "`ses_report` Linked session" in markdown
     assert "report output" in markdown
+    assert "## Task Timeline" in markdown
+    assert events.status_code == 200
+    assert events.get_json()["total"] >= 2
 
 
 def _create_session_db(path, directory):

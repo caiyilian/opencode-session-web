@@ -64,7 +64,7 @@
 - 任务详情内可发起 OpenCode 会话、继续会话或 Fork 会话。
 - OpenCode 完成后自动关联会话、Git snapshot 和可选验证命令结果。
 - 提供“生成阶段说明/PR 描述/验收记录草稿”入口，并在现有任务执行报告基础上补齐更完整的交付摘要。
-- 当前基础切片已实现：任务行可把任务上下文带入 Continue/New/Fork OpenCode 流，并在流成功完成后自动把 session id 写回任务关联。下一步继续把任务详情、Git snapshot 留痕和交付摘要做成更完整的单任务视图。
+- 当前基础切片已实现：任务行可把任务上下文带入 Continue/New/Fork OpenCode 流，并在流成功完成后自动把 session id 写回任务关联；OpenCode 完成、验证命令完成和报告生成都会写入任务执行事件，事件保留当时的 Git snapshot。下一步继续把任务详情和交付摘要做成更完整的单任务视图。
 
 验收：
 
