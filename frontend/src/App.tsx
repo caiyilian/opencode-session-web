@@ -26,6 +26,7 @@ import {
   getWorkspaceCommands,
   getWorkspaceGit,
   getWorkspaceProjects,
+  getWorkspaceTaskDetail,
   getWorkspaceTaskReport,
   getWorkspaceTasks,
   runWorkspaceCommandStream,
@@ -44,6 +45,7 @@ import {
   type WorkspaceCommandRun,
   type WorkspaceGitSnapshot,
   type WorkspaceTask,
+  type WorkspaceTaskDetail,
   type WorkspaceTaskEvent,
   type WorkspaceTaskReport,
   type WorkspaceTaskStatus,
@@ -129,6 +131,12 @@ type TaskReportState =
   | { status: "ready"; taskId: string; data: WorkspaceTaskReport }
   | { status: "error"; taskId: string; message: string };
 
+type TaskDetailState =
+  | { status: "idle" }
+  | { status: "loading"; taskId: string }
+  | { status: "ready"; taskId: string; data: WorkspaceTaskDetail }
+  | { status: "error"; taskId: string; message: string };
+
 type ValidationStreamState =
   | { status: "idle" }
   | { status: "running"; commandLabel: string; output: string }
@@ -180,6 +188,7 @@ export default function App() {
   const [taskDraftTitle, setTaskDraftTitle] = useState("");
   const [taskError, setTaskError] = useState("");
   const [taskBusyId, setTaskBusyId] = useState("");
+  const [taskDetailState, setTaskDetailState] = useState<TaskDetailState>({ status: "idle" });
   const [taskReportState, setTaskReportState] = useState<TaskReportState>({ status: "idle" });
   const [opencodeTaskId, setOpencodeTaskId] = useState("");
   const [gitState, setGitState] = useState<GitState>({ status: "idle" });
@@ -387,6 +396,7 @@ export default function App() {
   }, [selectedProject?.path]);
 
   useEffect(() => {
+    setTaskDetailState({ status: "idle" });
     setTaskReportState({ status: "idle" });
     setOpencodeTaskId("");
   }, [selectedProject?.path]);
@@ -527,6 +537,14 @@ export default function App() {
         throw new Error("Validation run did not return a result.");
       }
       await refreshDashboard();
+      if (
+        completedRun.task_id &&
+        taskDetailState.status !== "idle" &&
+        taskDetailState.taskId === completedRun.task_id
+      ) {
+        const linkedTask = selectedProjectTasks.find((task) => task.id === completedRun?.task_id);
+        if (linkedTask) await loadProjectTaskDetail(linkedTask);
+      }
     } catch (error) {
       if ((error as { name?: string }).name === "AbortError") return;
       const message = errorText(error);
@@ -563,12 +581,23 @@ export default function App() {
       });
       setTaskDraftTitle("");
       setCommandTaskId(created.task.id);
+      setTaskDetailState({ status: "idle" });
       setTaskReportState({ status: "idle" });
       await refreshDashboard();
     } catch (error) {
       setTaskError(errorText(error));
     } finally {
       setTaskBusyId("");
+    }
+  }
+
+  async function loadProjectTaskDetail(task: WorkspaceTask) {
+    setTaskDetailState({ status: "loading", taskId: task.id });
+    try {
+      const response = await getWorkspaceTaskDetail(task.id);
+      setTaskDetailState({ status: "ready", taskId: task.id, data: response.detail });
+    } catch (error) {
+      setTaskDetailState({ status: "error", taskId: task.id, message: errorText(error) });
     }
   }
 
@@ -586,8 +615,11 @@ export default function App() {
     setTaskBusyId(task.id);
     setTaskError("");
     try {
-      await updateWorkspaceTask(task.id, { status });
+      const updated = await updateWorkspaceTask(task.id, { status });
       await refreshDashboard();
+      if (taskDetailState.status !== "idle" && taskDetailState.taskId === task.id) {
+        await loadProjectTaskDetail(updated.task);
+      }
     } catch (error) {
       setTaskError(errorText(error));
     } finally {
@@ -1346,6 +1378,7 @@ export default function App() {
                 hasSelectedSession={Boolean(selectedSession)}
                 opencodeTaskId={opencodeTaskId}
                 project={selectedProject}
+                detailState={taskDetailState}
                 reportState={taskReportState}
                 statuses={data.taskStatuses}
                 tasks={selectedProjectTasks}
@@ -1355,6 +1388,7 @@ export default function App() {
                 }}
                 onCreate={createTaskForSelectedProject}
                 onContinue={useTaskInComposer}
+                onDetail={loadProjectTaskDetail}
                 onFork={openForkSessionForTask}
                 onNewSession={openNewSessionForTask}
                 onReport={loadProjectTaskReport}
@@ -1671,6 +1705,7 @@ function WorkspacePanel({
 
 function ProjectTasksPanel({
   busyId,
+  detailState,
   draftTitle,
   error,
   hasSelectedSession,
@@ -1681,6 +1716,7 @@ function ProjectTasksPanel({
   tasks,
   onCreate,
   onContinue,
+  onDetail,
   onDraftTitleChange,
   onFork,
   onNewSession,
@@ -1688,6 +1724,7 @@ function ProjectTasksPanel({
   onStatusChange,
 }: {
   busyId: string;
+  detailState: TaskDetailState;
   draftTitle: string;
   error: string;
   hasSelectedSession: boolean;
@@ -1698,6 +1735,7 @@ function ProjectTasksPanel({
   tasks: WorkspaceTask[];
   onCreate: () => void;
   onContinue: (task: WorkspaceTask) => void;
+  onDetail: (task: WorkspaceTask) => void;
   onDraftTitleChange: (value: string) => void;
   onFork: (task: WorkspaceTask) => void;
   onNewSession: (task: WorkspaceTask) => void;
@@ -1750,6 +1788,7 @@ function ProjectTasksPanel({
       <div className="task-list">
         {tasks.length > 0 ? (
           tasks.map((task) => {
+            const isDetailBusy = detailState.status === "loading" && detailState.taskId === task.id;
             const isReportBusy = reportState.status === "loading" && reportState.taskId === task.id;
             const isOpenCodeTask = opencodeTaskId === task.id;
             return (
@@ -1792,6 +1831,15 @@ function ProjectTasksPanel({
                     </button>
                   </div>
                   <button
+                    aria-label={`Open detail for ${task.title}`}
+                    className="task-detail-button"
+                    disabled={isDetailBusy}
+                    type="button"
+                    onClick={() => onDetail(task)}
+                  >
+                    {isDetailBusy ? "Loading" : "Details"}
+                  </button>
+                  <button
                     aria-label={`Build report for ${task.title}`}
                     className="task-report-button"
                     disabled={isReportBusy}
@@ -1808,6 +1856,7 @@ function ProjectTasksPanel({
           <PanelStatus label={project ? "No tasks for this project" : "No project selected"} />
         )}
       </div>
+      <TaskDetailPanel state={detailState} />
       {reportState.status === "loading" && (
         <div className="task-report-preview">
           <PanelStatus label="Loading task report" />
@@ -1831,6 +1880,136 @@ function ProjectTasksPanel({
         </div>
       )}
     </section>
+  );
+}
+
+function TaskDetailPanel({ state }: { state: TaskDetailState }) {
+  if (state.status === "idle") return null;
+
+  if (state.status === "loading") {
+    return (
+      <div className="task-detail-panel">
+        <PanelStatus label="Loading task detail" />
+      </div>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <div className="task-detail-panel">
+        <PanelStatus label={state.message} tone="error" />
+      </div>
+    );
+  }
+
+  const detail = state.data;
+  const { task } = detail;
+  const git = detail.git;
+
+  return (
+    <div className="task-detail-panel">
+      <div className="task-detail-header">
+        <div>
+          <h4>Task Detail</h4>
+          <p>{task.title}</p>
+        </div>
+        <span>{WORKSPACE_TASK_STATUS_LABELS[task.status]}</span>
+      </div>
+      <dl className="detail-list compact">
+        <div>
+          <dt>Project</dt>
+          <dd>{task.project_path || "N/A"}</dd>
+        </div>
+        <div>
+          <dt>Description</dt>
+          <dd>{task.description || "No description"}</dd>
+        </div>
+        <div>
+          <dt>Updated</dt>
+          <dd>{formatCompareTime(task.updated_at) || "Unknown time"}</dd>
+        </div>
+      </dl>
+
+      <div className="task-detail-section">
+        <h4>Linked Sessions</h4>
+        {detail.linked_sessions.length > 0 ? (
+          <div className="task-detail-linked-list">
+            {detail.linked_sessions.map((session) => (
+              <article className="task-detail-linked-row" key={session.id}>
+                <strong>{session.title || "Untitled session"}</strong>
+                <span>
+                  {session.model || "N/A"} · {session.time_updated || "Unknown time"}
+                </span>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <PanelStatus label="No linked sessions" />
+        )}
+      </div>
+
+      <div className="task-detail-section">
+        <h4>Git Snapshot</h4>
+        {!git ? (
+          <PanelStatus label="Git snapshot unavailable" />
+        ) : git.is_git_repo ? (
+          <>
+            <dl className="detail-list compact task-detail-inline-list">
+              <div>
+                <dt>Branch</dt>
+                <dd>{git.branch || "detached"}</dd>
+              </div>
+              <div>
+                <dt>Dirty files</dt>
+                <dd>{formatNumber(git.dirty_count)}</dd>
+              </div>
+            </dl>
+            {git.files.length > 0 ? (
+              <div className="git-file-list task-detail-git-files">
+                {git.files.slice(0, 5).map((file) => (
+                  <div className="git-file-row" key={`${file.status}-${file.path}`}>
+                    <span>{file.status}</span>
+                    <strong>{file.path}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <PanelStatus label="Working tree clean" />
+            )}
+          </>
+        ) : (
+          <PanelStatus label={git.error || "Project is not a Git repository"} />
+        )}
+      </div>
+
+      <div className="task-detail-section">
+        <h4>Validation History</h4>
+        {detail.command_runs.length > 0 ? (
+          <div className="validation-run-list task-detail-validation-list">
+            {detail.command_runs.slice(0, 5).map((run) => (
+              <article className={`validation-run-row ${run.status}`} key={run.id}>
+                <div className="validation-run-header">
+                  <strong>{run.command_label}</strong>
+                  <span>{COMMAND_RUN_STATUS_LABELS[run.status] ?? run.status}</span>
+                </div>
+                <div className="validation-run-meta">
+                  <span>{run.exit_code === null ? "no exit code" : `exit ${run.exit_code}`}</span>
+                  <span>{formatDurationMs(run.duration_ms)}</span>
+                  <span>{formatCompareTime(run.finished_at) || "Unknown time"}</span>
+                </div>
+                {run.output.trim() && <pre>{run.output.trim()}</pre>}
+              </article>
+            ))}
+          </div>
+        ) : (
+          <PanelStatus label="No validation runs linked to this task" />
+        )}
+      </div>
+
+      <div className="task-detail-section">
+        <TaskEventTimeline events={detail.events} />
+      </div>
+    </div>
   );
 }
 

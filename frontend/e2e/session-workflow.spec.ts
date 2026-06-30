@@ -35,10 +35,18 @@ test("browses, searches, opens a session, and keeps composer reachable", async (
     await page.locator(".validation-controls button").click();
     await expect(page.locator(".validation-live-run")).toContainText("workspace validation ok");
     await expect(page.locator(".validation-live-run")).toContainText("Passed");
+    await createdTask.getByRole("button", { name: /detail/i }).click();
+    await expect(page.locator(".task-detail-panel")).toContainText("Task Detail");
+    await expect(page.locator(".task-detail-panel")).toContainText("Prepare workspace task");
+    await expect(page.locator(".task-detail-panel")).toContainText("Alpha release planning");
+    await expect(page.locator(".task-detail-panel")).toContainText("workspace validation ok");
+    await expect(page.locator(".task-detail-panel")).toContainText("Validation Quick Check success");
     await page.locator(".task-report-button").first().click();
     await expect(page.locator(".task-report-preview")).toContainText("Prepare workspace task");
     await expect(page.locator(".task-report-preview")).toContainText("workspace validation ok");
-    await expect(page.locator(".task-event-list")).toContainText("Validation Quick Check success");
+    await expect(page.locator(".task-report-preview .task-event-list")).toContainText(
+      "Validation Quick Check success",
+    );
   }
 
   await search.fill("__missing_session__");

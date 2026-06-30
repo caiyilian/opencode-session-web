@@ -630,6 +630,20 @@ def api_workspace_task_update(task_id):
     return jsonify({"task": task})
 
 
+@app.route("/api/workspace/tasks/<task_id>/detail", methods=["GET"])
+def api_workspace_task_detail(task_id):
+    command_limit = _bounded_int_arg("command_limit", 20, minimum=1, maximum=100)
+    event_limit = _bounded_int_arg("event_limit", 50, minimum=1, maximum=100)
+    detail = _read_workspace_task_detail(
+        task_id,
+        command_limit=command_limit,
+        event_limit=event_limit,
+    )
+    if not detail:
+        return jsonify({"error": "任务不存在"}), 404
+    return jsonify({"detail": detail})
+
+
 @app.route("/api/workspace/tasks/<task_id>/report", methods=["GET"])
 def api_workspace_task_report(task_id):
     workspace_conn = get_workspace_db()
@@ -680,6 +694,26 @@ def api_workspace_task_events(task_id):
     events = fetch_task_events(conn, task_id, limit=limit)
     conn.close()
     return jsonify({"events": events, "total": len(events)})
+
+
+def _read_workspace_task_detail(task_id, *, command_limit=20, event_limit=50):
+    workspace_conn = get_workspace_db()
+    try:
+        task = get_task(workspace_conn, task_id)
+        if not task:
+            return None
+        command_runs = fetch_command_runs(workspace_conn, task_id=task_id, limit=command_limit)
+        task_events = fetch_task_events(workspace_conn, task_id, limit=event_limit)
+    finally:
+        workspace_conn.close()
+
+    return {
+        "task": task,
+        "linked_sessions": _fetch_linked_sessions(task["linked_session_ids"]),
+        "command_runs": command_runs,
+        "events": task_events,
+        "git": _read_task_git_snapshot(task),
+    }
 
 
 def _fetch_linked_sessions(session_ids):

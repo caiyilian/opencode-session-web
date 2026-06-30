@@ -332,3 +332,15 @@ export interface WorkspaceTaskReport {
 export interface WorkspaceTaskReportResponse {
   report: WorkspaceTaskReport;
 }
+
+export interface WorkspaceTaskDetail {
+  task: WorkspaceTask;
+  linked_sessions: WorkspaceTaskReportSession[];
+  command_runs: WorkspaceCommandRun[];
+  events: WorkspaceTaskEvent[];
+  git: WorkspaceGitSnapshot | null;
+}
+
+export interface WorkspaceTaskDetailResponse {
+  detail: WorkspaceTaskDetail;
+}
