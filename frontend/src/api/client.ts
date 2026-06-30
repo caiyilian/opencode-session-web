@@ -11,6 +11,7 @@ import type {
   WorkspaceTaskResponse,
   WorkspaceTasksResponse,
   WorkspaceTaskStatus,
+  WorkspaceGitResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -164,6 +165,12 @@ export function updateWorkspaceTask(taskId: string, payload: UpdateWorkspaceTask
   });
 }
 
+export function getWorkspaceGit(projectPath: string) {
+  return apiRequest<WorkspaceGitResponse>(
+    `/api/workspace/git${queryString({ project_path: projectPath })}`,
+  );
+}
+
 export function deleteSession(sessionId: string) {
   return apiRequest<MutationResponse>(`/api/sessions/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
@@ -191,7 +198,7 @@ function errorMessage(payload: unknown): string {
   return "";
 }
 
-function queryString(query: SessionsQuery | WorkspaceTasksQuery): string {
+function queryString(query: SessionsQuery | WorkspaceTasksQuery | { project_path: string }): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && value !== null && value !== "") {

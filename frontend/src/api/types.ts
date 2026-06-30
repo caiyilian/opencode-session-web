@@ -231,3 +231,28 @@ export interface WorkspaceTasksResponse {
 export interface WorkspaceTaskResponse {
   task: WorkspaceTask;
 }
+
+export interface GitFileStatus {
+  path: string;
+  status: string;
+}
+
+export interface GitCommitSummary {
+  sha: string;
+  subject: string;
+}
+
+export interface WorkspaceGitSnapshot {
+  project_path: string;
+  is_git_repo: boolean;
+  repo_root: string;
+  branch: string;
+  dirty_count: number;
+  files: GitFileStatus[];
+  recent_commits: GitCommitSummary[];
+  error: string;
+}
+
+export interface WorkspaceGitResponse {
+  git: WorkspaceGitSnapshot;
+}

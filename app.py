@@ -35,6 +35,7 @@ from repositories.workspace_tasks import (
     update_task,
 )
 from services import sse
+from services.git_status import read_git_snapshot
 from services.opencode_errors import format_stream_error_message, is_known_error_text
 from services.opencode_events import parse_part
 from services.opencode_runner import event_to_sse
@@ -613,6 +614,24 @@ def api_workspace_task_update(task_id):
     if not task:
         return jsonify({"error": "任务不存在"}), 404
     return jsonify({"task": task})
+
+
+@app.route("/api/workspace/git")
+def api_workspace_git():
+    project_path = request.args.get("project_path", "").strip()
+    if not project_path:
+        return jsonify({"error": "project_path 参数不能为空"}), 400
+    try:
+        snapshot = read_git_snapshot(project_path)
+    except FileNotFoundError as exc:
+        if str(exc) == "项目目录不存在":
+            return jsonify({"error": str(exc)}), 404
+        return jsonify({"error": "git CLI 未找到"}), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "读取 Git 状态超时"}), 504
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"git": snapshot.to_dict()})
 
 
 @app.route("/api/models")
