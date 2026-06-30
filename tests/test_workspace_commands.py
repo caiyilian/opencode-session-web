@@ -18,6 +18,7 @@ def test_workspace_command_run_records_success(tmp_path):
                     "label": "Check project",
                     "argv": [sys.executable, "-c", "print('workspace ok')"],
                     "cwd": ".",
+                    "safety_note": "Runs the project check command.",
                 }
             ],
         }
@@ -27,6 +28,8 @@ def test_workspace_command_run_records_success(tmp_path):
         commands = client.get("/api/workspace/commands")
         assert commands.status_code == 200
         assert commands.get_json()["commands"][0]["key"] == "check"
+        assert commands.get_json()["commands"][0]["requires_confirmation"] is False
+        assert commands.get_json()["commands"][0]["safety_note"] == "Runs the project check command."
 
         created = client.post(
             "/api/workspace/command-runs",
@@ -116,6 +119,51 @@ def test_workspace_command_run_rejects_unknown_command(tmp_path):
 
     assert response.status_code == 400
     assert "白名单" in response.get_json()["error"]
+
+
+def test_workspace_command_run_requires_confirmation_for_dangerous_command(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    app = webapp.create_app(
+        {
+            "TESTING": True,
+            "OPENCODE_WORKSPACE_DB_PATH": str(tmp_path / "workspace.db"),
+            "OPENCODE_WORKSPACE_COMMANDS": [
+                {
+                    "key": "deploy",
+                    "label": "Deploy",
+                    "argv": [sys.executable, "-c", "print('deployed')"],
+                    "requires_confirmation": True,
+                    "safety_note": "This command can change remote state.",
+                }
+            ],
+        }
+    )
+
+    with app.test_client() as client:
+        commands = client.get("/api/workspace/commands")
+        rejected = client.post(
+            "/api/workspace/command-runs",
+            json={"project_path": str(project), "command_key": "deploy"},
+        )
+        streamed_rejected = client.post(
+            "/api/workspace/command-runs/stream",
+            json={"project_path": str(project), "command_key": "deploy"},
+        )
+        accepted = client.post(
+            "/api/workspace/command-runs",
+            json={"project_path": str(project), "command_key": "deploy", "confirmed": True},
+        )
+
+    command = commands.get_json()["commands"][0]
+    assert command["requires_confirmation"] is True
+    assert command["safety_note"] == "This command can change remote state."
+    assert rejected.status_code == 400
+    assert "确认" in rejected.get_json()["error"]
+    assert streamed_rejected.status_code == 400
+    assert "确认" in streamed_rejected.get_json()["error"]
+    assert accepted.status_code == 201
+    assert "deployed" in accepted.get_json()["run"]["output"]
 
 
 def test_workspace_command_config_rejects_unsafe_cwd():

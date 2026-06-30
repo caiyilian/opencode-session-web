@@ -215,6 +215,24 @@ describe("api client", () => {
       }),
     );
 
+    mockJsonResponse({ run: { id: "run_confirmed" } });
+    await runWorkspaceCommand({
+      project_path: "C:/repo/app",
+      command_key: "deploy",
+      confirmed: true,
+    });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/command-runs",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          project_path: "C:/repo/app",
+          command_key: "deploy",
+          confirmed: true,
+        }),
+      }),
+    );
+
     mockJsonResponse({ ok: true });
     await runWorkspaceCommandStream({
       project_path: "C:/repo/app",

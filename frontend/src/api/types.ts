@@ -286,6 +286,8 @@ export interface WorkspaceCommand {
   argv: string[];
   cwd: string;
   description: string;
+  requires_confirmation: boolean;
+  safety_note: string;
 }
 
 export interface WorkspaceCommandsResponse {

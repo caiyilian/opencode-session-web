@@ -17,6 +17,8 @@ class WorkspaceCommand:
     argv: list[str]
     cwd: str = "."
     description: str = ""
+    requires_confirmation: bool = False
+    safety_note: str = ""
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -25,6 +27,8 @@ class WorkspaceCommand:
             "argv": self.argv,
             "cwd": self.cwd,
             "description": self.description,
+            "requires_confirmation": self.requires_confirmation,
+            "safety_note": self.safety_note,
         }
 
 
@@ -72,6 +76,8 @@ def parse_workspace_commands(raw: Any) -> list[WorkspaceCommand]:
                 argv=[str(part) for part in argv],
                 cwd=cwd,
                 description=str(item.get("description") or "").strip(),
+                requires_confirmation=bool(item.get("requires_confirmation", False)),
+                safety_note=str(item.get("safety_note") or "").strip(),
             )
         )
         seen_keys.add(key)
@@ -80,6 +86,11 @@ def parse_workspace_commands(raw: Any) -> list[WorkspaceCommand]:
 
 def find_workspace_command(commands: list[WorkspaceCommand], key: str) -> WorkspaceCommand | None:
     return next((command for command in commands if command.key == key), None)
+
+
+def require_workspace_command_confirmation(command: WorkspaceCommand, confirmed: Any) -> None:
+    if command.requires_confirmation and confirmed is not True:
+        raise ValueError("命令需要确认后才能运行")
 
 
 def run_workspace_command(

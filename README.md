@@ -100,7 +100,7 @@ React 应用会由 Flask 从 `frontend/dist` 服务，API 请求保持同源。
 | --- | --- | --- |
 | `OPENCODE_DB_PATH` | `~/.local/share/opencode/opencode.db` | 要读取的 SQLite 数据库。使用自定义 OpenCode 数据目录或 fixture 数据库时设置它。 |
 | `OPENCODE_WORKSPACE_DB_PATH` | `~/.opencode-session-web/workspace.db` | OpenCode Session Web 自己的 Workspace 数据库，用于保存任务等本地工作台状态。 |
-| `OPENCODE_WORKSPACE_COMMANDS_JSON` | `[]` | Workspace 验证命令白名单，JSON 数组格式，每项包含 `key`、`label`、`argv` 和可选相对 `cwd`。命令不会通过 shell 执行。 |
+| `OPENCODE_WORKSPACE_COMMANDS_JSON` | `[]` | Workspace 验证命令白名单，JSON 数组格式，每项包含 `key`、`label`、`argv` 和可选相对 `cwd`、`description`、`requires_confirmation`、`safety_note`。命令不会通过 shell 执行；`requires_confirmation` 为 true 时 Web 端必须确认且后端会强制校验。 |
 | `OPENCODE_WORKSPACE_COMMAND_TIMEOUT` | `120` | Workspace 验证命令的最长运行时间，单位秒。 |
 | `OPENCODE_USE_FRONTEND_DIST` | 未设置/false | 设置为 `1`、`true`、`yes` 或 `on` 时服务 React 构建产物，而不是旧版静态界面。 |
 | `OPENCODE_FRONTEND_DIST_DIR` | `frontend/dist` | Flask 服务的 React 构建目录。 |

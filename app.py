@@ -50,6 +50,7 @@ from services.workspace_commands import (
     CommandExecution,
     find_workspace_command,
     parse_workspace_commands,
+    require_workspace_command_confirmation,
     resolve_workspace_command_cwd,
     run_workspace_command,
     truncate_command_output,
@@ -852,6 +853,10 @@ def api_workspace_command_run_create():
     command = find_workspace_command(commands, command_key)
     if not command:
         return jsonify({"error": "命令不在白名单中"}), 400
+    try:
+        require_workspace_command_confirmation(command, payload.get("confirmed") is True)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     try:
         result = run_workspace_command(
@@ -896,6 +901,10 @@ def api_workspace_command_run_stream():
     command = find_workspace_command(commands, command_key)
     if not command:
         return jsonify({"error": "命令不在白名单中"}), 400
+    try:
+        require_workspace_command_confirmation(command, payload.get("confirmed") is True)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     try:
         project_root = os.path.abspath(os.path.expanduser(project_path))

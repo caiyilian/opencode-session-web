@@ -193,6 +193,7 @@ export default function App() {
   const [opencodeTaskId, setOpencodeTaskId] = useState("");
   const [gitState, setGitState] = useState<GitState>({ status: "idle" });
   const [commandKey, setCommandKey] = useState("");
+  const [commandConfirmed, setCommandConfirmed] = useState(false);
   const [commandTaskId, setCommandTaskId] = useState("");
   const [commandBusy, setCommandBusy] = useState(false);
   const [commandError, setCommandError] = useState("");
@@ -330,6 +331,10 @@ export default function App() {
       setCommandKey(commands[0].key);
     }
   }, [commandKey, data?.commands]);
+
+  useEffect(() => {
+    setCommandConfirmed(false);
+  }, [commandKey, selectedProject?.path]);
 
   useEffect(() => {
     if (!selectedSession) {
@@ -483,6 +488,7 @@ export default function App() {
           project_path: selectedProject.path,
           command_key: commandKey,
           task_id: commandTaskId,
+          confirmed: commandConfirmed,
         },
         controller.signal,
       );
@@ -1397,6 +1403,7 @@ export default function App() {
               <GitSnapshotPanel state={gitState} />
               <ValidationRunsPanel
                 busy={commandBusy}
+                confirmed={commandConfirmed}
                 commandKey={commandKey}
                 commands={data.commands}
                 error={commandError}
@@ -1404,8 +1411,10 @@ export default function App() {
                 streamState={commandStreamState}
                 taskId={commandTaskId}
                 tasks={selectedProjectTasks}
+                onConfirmationChange={setCommandConfirmed}
                 onCommandChange={(value) => {
                   setCommandKey(value);
+                  setCommandConfirmed(false);
                   if (commandError) setCommandError("");
                 }}
                 onRun={runSelectedWorkspaceCommand}
@@ -2104,6 +2113,7 @@ function GitSnapshotPanel({ state }: { state: GitState }) {
 
 function ValidationRunsPanel({
   busy,
+  confirmed,
   commandKey,
   commands,
   error,
@@ -2111,11 +2121,13 @@ function ValidationRunsPanel({
   streamState,
   taskId,
   tasks,
+  onConfirmationChange,
   onCommandChange,
   onRun,
   onTaskChange,
 }: {
   busy: boolean;
+  confirmed: boolean;
   commandKey: string;
   commands: WorkspaceCommand[];
   error: string;
@@ -2123,10 +2135,14 @@ function ValidationRunsPanel({
   streamState: ValidationStreamState;
   taskId: string;
   tasks: WorkspaceTask[];
+  onConfirmationChange: (value: boolean) => void;
   onCommandChange: (value: string) => void;
   onRun: () => void;
   onTaskChange: (value: string) => void;
 }) {
+  const selectedCommand = commands.find((command) => command.key === commandKey) ?? null;
+  const needsConfirmation = Boolean(selectedCommand?.requires_confirmation);
+
   return (
     <section className="detail-panel validation-panel" aria-label="Validation runs">
       <div className="panel-heading">
@@ -2166,7 +2182,27 @@ function ValidationRunsPanel({
               ))}
             </select>
           </label>
-          <button disabled={busy || !commandKey} type="button" onClick={onRun}>
+          {selectedCommand && (
+            <div className={`validation-safety-note ${needsConfirmation ? "requires-confirmation" : ""}`}>
+              <strong>{needsConfirmation ? "Confirmation required" : "Command boundary"}</strong>
+              <p>
+                {selectedCommand.safety_note ||
+                  "Runs only the selected whitelisted argv inside the configured project directory."}
+              </p>
+              {needsConfirmation && (
+                <label className="validation-confirmation">
+                  <input
+                    checked={confirmed}
+                    disabled={busy}
+                    type="checkbox"
+                    onChange={(event) => onConfirmationChange(event.target.checked)}
+                  />
+                  <span>I understand this command may have side effects.</span>
+                </label>
+              )}
+            </div>
+          )}
+          <button disabled={busy || !commandKey || (needsConfirmation && !confirmed)} type="button" onClick={onRun}>
             {busy ? "Running" : "Run"}
           </button>
         </div>

@@ -1175,6 +1175,52 @@ textarea:focus-visible {
   background: #ffffff;
 }
 
+.validation-safety-note {
+  display: grid;
+  gap: 5px;
+  border: 1px solid #d9e0ea;
+  border-radius: 6px;
+  padding: 9px;
+  color: #52606f;
+  background: #f8fafc;
+}
+
+.validation-safety-note.requires-confirmation {
+  border-color: #f5c26b;
+  color: #7a4b00;
+  background: #fff8e6;
+}
+
+.validation-safety-note strong {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.validation-safety-note p {
+  margin: 0;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.validation-confirmation {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.validation-confirmation input {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
 .validation-controls button {
   height: 34px;
   border: 1px solid #2864c8;

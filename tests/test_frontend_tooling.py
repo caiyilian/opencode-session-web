@@ -108,6 +108,8 @@ def test_react_app_loads_core_api_data():
     assert "Git Snapshot" in app_source
     assert "ValidationRunsPanel" in app_source
     assert "Validation Runs" in app_source
+    assert "Confirmation required" in app_source
+    assert "validation-safety-note" in app_source
     assert "validation-live-run" in app_source
     assert "MessageTimeline" in app_source
     assert "SessionComposer" in app_source
