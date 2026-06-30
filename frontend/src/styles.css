@@ -921,6 +921,31 @@ textarea:focus-visible {
   font-weight: 650;
 }
 
+.task-detail-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 8px 14px 10px;
+}
+
+.task-detail-actions button {
+  height: 30px;
+  min-width: 0;
+  border: 1px solid #c7d7f4;
+  border-radius: 6px;
+  color: #24456f;
+  background: #f4f8ff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.task-detail-actions button:disabled {
+  color: #9aa3b2;
+  background: #edf1f6;
+  cursor: default;
+}
+
 .task-detail-section {
   display: grid;
   min-width: 0;

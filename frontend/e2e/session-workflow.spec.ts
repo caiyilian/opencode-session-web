@@ -41,9 +41,11 @@ test("browses, searches, opens a session, and keeps composer reachable", async (
     await expect(page.locator(".task-detail-panel")).toContainText("Alpha release planning");
     await expect(page.locator(".task-detail-panel")).toContainText("workspace validation ok");
     await expect(page.locator(".task-detail-panel")).toContainText("Validation Quick Check success");
+    await expect(page.locator(".task-detail-actions")).toContainText("Continue");
     await page.locator(".task-report-button").first().click();
     await expect(page.locator(".task-report-preview")).toContainText("Prepare workspace task");
     await expect(page.locator(".task-report-preview")).toContainText("workspace validation ok");
+    await expect(page.locator(".task-report-preview")).toContainText("PR Description Draft");
     await expect(page.locator(".task-report-preview .task-event-list")).toContainText(
       "Validation Quick Check success",
     );

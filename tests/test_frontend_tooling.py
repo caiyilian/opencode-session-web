@@ -97,6 +97,7 @@ def test_react_app_loads_core_api_data():
     assert "Project Tasks" in app_source
     assert "TaskDetailPanel" in app_source
     assert "Task Detail" in app_source
+    assert "task-detail-actions" in app_source
     assert "task-detail-panel" in app_source
     assert "Task Report" in app_source
     assert "Execution Timeline" in app_source

@@ -1865,7 +1865,13 @@ function ProjectTasksPanel({
           <PanelStatus label={project ? "No tasks for this project" : "No project selected"} />
         )}
       </div>
-      <TaskDetailPanel state={detailState} />
+      <TaskDetailPanel
+        hasSelectedSession={hasSelectedSession}
+        state={detailState}
+        onContinue={onContinue}
+        onFork={onFork}
+        onNewSession={onNewSession}
+      />
       {reportState.status === "loading" && (
         <div className="task-report-preview">
           <PanelStatus label="Loading task report" />
@@ -1892,7 +1898,19 @@ function ProjectTasksPanel({
   );
 }
 
-function TaskDetailPanel({ state }: { state: TaskDetailState }) {
+function TaskDetailPanel({
+  hasSelectedSession,
+  state,
+  onContinue,
+  onFork,
+  onNewSession,
+}: {
+  hasSelectedSession: boolean;
+  state: TaskDetailState;
+  onContinue: (task: WorkspaceTask) => void;
+  onFork: (task: WorkspaceTask) => void;
+  onNewSession: (task: WorkspaceTask) => void;
+}) {
   if (state.status === "idle") return null;
 
   if (state.status === "loading") {
@@ -1923,6 +1941,17 @@ function TaskDetailPanel({ state }: { state: TaskDetailState }) {
           <p>{task.title}</p>
         </div>
         <span>{WORKSPACE_TASK_STATUS_LABELS[task.status]}</span>
+      </div>
+      <div className="task-detail-actions" aria-label={`OpenCode task detail actions for ${task.title}`}>
+        <button disabled={!hasSelectedSession} type="button" onClick={() => onContinue(task)}>
+          Continue
+        </button>
+        <button type="button" onClick={() => onNewSession(task)}>
+          New
+        </button>
+        <button disabled={!hasSelectedSession} type="button" onClick={() => onFork(task)}>
+          Fork
+        </button>
       </div>
       <dl className="detail-list compact">
         <div>
