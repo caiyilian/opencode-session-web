@@ -232,6 +232,15 @@ export interface WorkspaceTaskResponse {
   task: WorkspaceTask;
 }
 
+export interface WorkspaceTaskReportSession {
+  id: string;
+  title: string;
+  directory: string;
+  model: string;
+  time_updated: string;
+  time_updated_raw: number;
+}
+
 export interface GitFileStatus {
   path: string;
   status: string;
@@ -295,4 +304,16 @@ export interface WorkspaceCommandRunsResponse {
 
 export interface WorkspaceCommandRunResponse {
   run: WorkspaceCommandRun;
+}
+
+export interface WorkspaceTaskReport {
+  task: WorkspaceTask;
+  linked_sessions: WorkspaceTaskReportSession[];
+  command_runs: WorkspaceCommandRun[];
+  git: WorkspaceGitSnapshot | null;
+  markdown: string;
+}
+
+export interface WorkspaceTaskReportResponse {
+  report: WorkspaceTaskReport;
 }

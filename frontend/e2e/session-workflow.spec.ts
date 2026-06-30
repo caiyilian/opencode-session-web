@@ -31,6 +31,9 @@ test("browses, searches, opens a session, and keeps composer reachable", async (
     await page.locator(".validation-controls button").click();
     await expect(page.locator(".validation-run-row")).toContainText("Quick Check");
     await expect(page.locator(".validation-run-row")).toContainText("workspace validation ok");
+    await page.locator(".task-report-button").first().click();
+    await expect(page.locator(".task-report-preview")).toContainText("Prepare workspace task");
+    await expect(page.locator(".task-report-preview")).toContainText("workspace validation ok");
   }
 
   await search.fill("__missing_session__");
