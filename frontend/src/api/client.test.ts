@@ -14,6 +14,7 @@ import {
   getWorkspaceCommands,
   getWorkspaceCommandRuns,
   getWorkspaceTaskEvents,
+  getWorkspaceTaskDetail,
   getWorkspaceTaskReport,
   getWorkspaceTasks,
   getWorkspaceProjects,
@@ -133,6 +134,15 @@ describe("api client", () => {
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({ status: "done" }),
+      }),
+    );
+
+    mockJsonResponse({ detail: { task: { id: "task_1" } } });
+    await getWorkspaceTaskDetail("task/1");
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/tasks/task%2F1/detail",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
 
