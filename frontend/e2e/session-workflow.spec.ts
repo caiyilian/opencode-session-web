@@ -28,6 +28,9 @@ test("browses, searches, opens a session, and keeps composer reachable", async (
     await expect(page.locator(".task-row")).toContainText("Prepare workspace task");
     await page.locator(".task-row select").selectOption("done");
     await expect(page.locator(".task-row")).toContainText("Done");
+    await page.locator(".validation-controls button").click();
+    await expect(page.locator(".validation-run-row")).toContainText("Quick Check");
+    await expect(page.locator(".validation-run-row")).toContainText("workspace validation ok");
   }
 
   await search.fill("__missing_session__");
@@ -47,6 +50,7 @@ test("browses, searches, opens a session, and keeps composer reachable", async (
   }
 
   await expect(page.getByRole("heading", { name: "Messages" })).toBeVisible();
+  await page.locator(".timeline-panel").scrollIntoViewIfNeeded();
   await expect(page.locator(".timeline-panel")).toBeInViewport();
   await expect(page.locator(".composer-panel")).toBeInViewport();
   await expect(page.locator(".tool-card")).toContainText("bash");

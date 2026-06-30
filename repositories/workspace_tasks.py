@@ -35,6 +35,30 @@ def init_workspace_db(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_workspace_task_project_status ON workspace_task(project_path, status)"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_workspace_task_updated ON workspace_task(updated_at)")
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS workspace_command_run (
+            id TEXT PRIMARY KEY,
+            project_path TEXT NOT NULL DEFAULT '',
+            task_id TEXT NOT NULL DEFAULT '',
+            command_key TEXT NOT NULL,
+            command_label TEXT NOT NULL,
+            command_argv TEXT NOT NULL,
+            cwd TEXT NOT NULL,
+            status TEXT NOT NULL,
+            exit_code INTEGER,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            output TEXT NOT NULL DEFAULT '',
+            started_at INTEGER NOT NULL,
+            finished_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        )"""
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workspace_command_run_project ON workspace_command_run(project_path, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workspace_command_run_task ON workspace_command_run(task_id, created_at)"
+    )
     conn.commit()
 
 
@@ -147,6 +171,101 @@ def serialize_task(row: sqlite3.Row) -> dict[str, Any]:
         "linked_session_ids": _loads_list(row["linked_session_ids"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+    }
+
+
+def record_command_run(
+    conn: sqlite3.Connection,
+    *,
+    project_path: str,
+    task_id: str,
+    command_key: str,
+    command_label: str,
+    command_argv: list[str],
+    cwd: str,
+    status: str,
+    exit_code: int | None,
+    duration_ms: int,
+    output: str,
+    started_at: int,
+    finished_at: int,
+) -> dict[str, Any]:
+    run_id = f"run_{uuid.uuid4().hex}"
+    created_at = _now_ms()
+    conn.execute(
+        """INSERT INTO workspace_command_run
+           (id, project_path, task_id, command_key, command_label, command_argv, cwd, status,
+            exit_code, duration_ms, output, started_at, finished_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            run_id,
+            str(project_path or "").strip(),
+            str(task_id or "").strip(),
+            command_key,
+            command_label,
+            json.dumps(command_argv, ensure_ascii=False),
+            cwd,
+            status,
+            exit_code,
+            duration_ms,
+            output,
+            started_at,
+            finished_at,
+            created_at,
+        ),
+    )
+    conn.commit()
+    return get_command_run(conn, run_id)
+
+
+def fetch_command_runs(
+    conn: sqlite3.Connection,
+    *,
+    project_path: str = "",
+    task_id: str = "",
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    conditions = []
+    params = []
+    if project_path:
+        conditions.append("project_path = ?")
+        params.append(project_path)
+    if task_id:
+        conditions.append("task_id = ?")
+        params.append(task_id)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    rows = conn.execute(
+        f"""SELECT *
+            FROM workspace_command_run
+            {where}
+            ORDER BY created_at DESC
+            LIMIT ?""",
+        params + [limit],
+    ).fetchall()
+    return [serialize_command_run(row) for row in rows]
+
+
+def get_command_run(conn: sqlite3.Connection, run_id: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM workspace_command_run WHERE id = ?", (run_id,)).fetchone()
+    return serialize_command_run(row) if row else None
+
+
+def serialize_command_run(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "project_path": row["project_path"],
+        "task_id": row["task_id"],
+        "command_key": row["command_key"],
+        "command_label": row["command_label"],
+        "command_argv": _loads_list(row["command_argv"]),
+        "cwd": row["cwd"],
+        "status": row["status"],
+        "exit_code": row["exit_code"],
+        "duration_ms": row["duration_ms"],
+        "output": row["output"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+        "created_at": row["created_at"],
     }
 
 

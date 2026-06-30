@@ -868,6 +868,136 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.validation-panel {
+  overflow: hidden;
+}
+
+.validation-controls {
+  display: grid;
+  gap: 9px;
+  padding: 14px;
+}
+
+.validation-controls label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: #52606f;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.validation-controls select {
+  width: 100%;
+  height: 34px;
+  min-width: 0;
+  border: 1px solid #cfd6e2;
+  border-radius: 6px;
+  padding: 0 9px;
+  color: #202124;
+  background: #ffffff;
+}
+
+.validation-controls button {
+  height: 34px;
+  border: 1px solid #2864c8;
+  border-radius: 6px;
+  color: #ffffff;
+  background: #2864c8;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.validation-controls button:disabled {
+  border-color: #d9e0ea;
+  color: #7a8495;
+  background: #e5e7eb;
+  cursor: default;
+}
+
+.validation-error {
+  margin: -6px 14px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 8px;
+  color: #991b1b;
+  background: #fef2f2;
+  font-size: 12px;
+}
+
+.validation-run-list {
+  display: grid;
+  gap: 9px;
+  border-top: 1px solid #e3e8f0;
+  padding: 12px 14px 14px;
+}
+
+.validation-run-row {
+  min-width: 0;
+  border: 1px solid #e3e8f0;
+  border-left: 4px solid #cfd6e2;
+  border-radius: 6px;
+  padding: 9px;
+  background: #f8fafc;
+}
+
+.validation-run-row.success {
+  border-left-color: #16a34a;
+}
+
+.validation-run-row.failed,
+.validation-run-row.timeout {
+  border-left-color: #b42318;
+}
+
+.validation-run-header,
+.validation-run-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+}
+
+.validation-run-header strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #1f2937;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.validation-run-header span {
+  color: #374151;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.validation-run-meta {
+  justify-content: flex-start;
+  margin-top: 5px;
+  color: #697385;
+  font-size: 11px;
+}
+
+.validation-run-row pre {
+  max-height: 160px;
+  margin: 8px 0 0;
+  overflow: auto;
+  border: 1px solid #e3e8f0;
+  border-radius: 6px;
+  padding: 8px;
+  color: #202124;
+  background: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .stats-panel {
   grid-column: 1 / -1;
 }

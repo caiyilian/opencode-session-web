@@ -1,4 +1,5 @@
 import os
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -7,6 +8,8 @@ from pathlib import Path
 class AppConfig:
     db_path: str
     workspace_db_path: str
+    workspace_commands: object
+    workspace_command_timeout: int
     opencode_stream_timeout: int
     opencode_idle_timeout: int
     log_dir: str
@@ -25,6 +28,8 @@ class AppConfig:
                     str(Path.home() / ".opencode-session-web" / "workspace.db"),
                 )
             ),
+            workspace_commands=json.loads(os.environ.get("OPENCODE_WORKSPACE_COMMANDS_JSON", "[]")),
+            workspace_command_timeout=int(os.environ.get("OPENCODE_WORKSPACE_COMMAND_TIMEOUT", "120")),
             opencode_stream_timeout=int(os.environ.get("OPENCODE_STREAM_TIMEOUT", "600")),
             opencode_idle_timeout=int(os.environ.get("OPENCODE_IDLE_TIMEOUT", "25")),
             log_dir=os.environ.get(
@@ -43,6 +48,8 @@ class AppConfig:
         return {
             "OPENCODE_DB_PATH": self.db_path,
             "OPENCODE_WORKSPACE_DB_PATH": self.workspace_db_path,
+            "OPENCODE_WORKSPACE_COMMANDS": self.workspace_commands,
+            "OPENCODE_WORKSPACE_COMMAND_TIMEOUT": self.workspace_command_timeout,
             "OPENCODE_STREAM_TIMEOUT": self.opencode_stream_timeout,
             "OPENCODE_IDLE_TIMEOUT": self.opencode_idle_timeout,
             "OPENCODE_WEB_LOG_DIR": self.log_dir,

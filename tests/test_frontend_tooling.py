@@ -47,6 +47,9 @@ def test_frontend_api_client_scaffold_exports_core_helpers():
         "createWorkspaceTask",
         "updateWorkspaceTask",
         "getWorkspaceGit",
+        "getWorkspaceCommands",
+        "getWorkspaceCommandRuns",
+        "runWorkspaceCommand",
     ]:
         assert f"function {helper}" in client_source
 
@@ -58,6 +61,8 @@ def test_frontend_api_client_scaffold_exports_core_helpers():
         "ProjectWorkspace",
         "WorkspaceTask",
         "WorkspaceGitSnapshot",
+        "WorkspaceCommand",
+        "WorkspaceCommandRun",
     ]:
         assert f"interface {type_name}" in types_source or f"type {type_name}" in types_source
 
@@ -85,6 +90,8 @@ def test_react_app_loads_core_api_data():
     assert "Project Tasks" in app_source
     assert "GitSnapshotPanel" in app_source
     assert "Git Snapshot" in app_source
+    assert "ValidationRunsPanel" in app_source
+    assert "Validation Runs" in app_source
     assert "MessageTimeline" in app_source
     assert "SessionComposer" in app_source
     assert "NewSessionPanel" in app_source
