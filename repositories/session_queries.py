@@ -174,3 +174,61 @@ def fetch_token_stats(conn, *, since_ms):
     ).fetchone()[0]
 
     return daily, by_model, by_project, total_cost_all
+
+
+def fetch_project_workspaces(conn, *, limit=50, recent_limit=3, model_limit=3):
+    cursor = conn.cursor()
+    usage_cte, usage_join, usage_expr = session_usage_query_parts(conn, "s")
+    model_expr = session_column_expr(conn, "model", "s", "'N/A'")
+
+    project_rows = cursor.execute(
+        f"""{usage_cte}
+           SELECT s.directory,
+                  COUNT(*) AS session_count,
+                  COALESCE(SUM((SELECT COUNT(*) FROM message m WHERE m.session_id = s.id)), 0) AS message_count,
+                  MIN(s.time_created) AS first_active,
+                  MAX(s.time_updated) AS last_active,
+                  SUM({usage_expr["cost"]}) AS cost,
+                  SUM({usage_expr["tokens_input"]}) AS tokens_input,
+                  SUM({usage_expr["tokens_output"]}) AS tokens_output
+           FROM session s
+           {usage_join}
+           WHERE s.directory IS NOT NULL AND s.directory != ''
+           GROUP BY s.directory
+           ORDER BY last_active DESC
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()
+
+    projects = []
+    for row in project_rows:
+        directory = row["directory"]
+        top_models = cursor.execute(
+            f"""SELECT {model_expr} AS model, COUNT(*) AS count
+                FROM session s
+                WHERE s.directory = ?
+                GROUP BY {model_expr}
+                ORDER BY count DESC, model ASC
+                LIMIT ?""",
+            (directory, model_limit),
+        ).fetchall()
+        recent_sessions = cursor.execute(
+            f"""SELECT s.id,
+                       s.title,
+                       {model_expr} AS model,
+                       s.time_updated
+                FROM session s
+                WHERE s.directory = ?
+                ORDER BY s.time_updated DESC
+                LIMIT ?""",
+            (directory, recent_limit),
+        ).fetchall()
+        projects.append(
+            {
+                "row": row,
+                "top_models": top_models,
+                "recent_sessions": recent_sessions,
+            }
+        )
+
+    return projects

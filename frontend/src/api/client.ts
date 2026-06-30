@@ -7,6 +7,7 @@ import type {
   SessionsResponse,
   StatsResponse,
   UsedModelsResponse,
+  WorkspaceProjectsResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -115,6 +116,10 @@ export function getAvailableModels() {
 
 export function getUsedModels() {
   return apiRequest<UsedModelsResponse>("/api/models");
+}
+
+export function getWorkspaceProjects(limit = 50) {
+  return apiRequest<WorkspaceProjectsResponse>(`/api/workspace/projects${queryString({ limit })}`);
 }
 
 export function deleteSession(sessionId: string) {

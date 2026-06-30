@@ -21,11 +21,13 @@ import {
   getSessionStreamUrl,
   getSessions,
   getStats,
+  getWorkspaceProjects,
   undoSession,
   type DirectorySummary,
   type CompareResponse,
   type CompareSession,
   type MessagePart,
+  type ProjectWorkspace,
   type SessionDetailResponse,
   type SessionMessage,
   type SessionSummary,
@@ -38,6 +40,7 @@ interface DashboardData {
   stats: StatsResponse;
   directories: DirectorySummary[];
   sessions: SessionSummary[];
+  projects: ProjectWorkspace[];
   availableModels: string[];
   modelLoadError?: string;
 }
@@ -134,10 +137,11 @@ export default function App() {
 
     async function load() {
       try {
-        const [stats, directories, sessions, models] = await Promise.all([
+        const [stats, directories, sessions, projects, models] = await Promise.all([
           getStats(),
           getDirectories(),
           getSessions({ limit: 200 }),
+          getWorkspaceProjects(50),
           getAvailableModels()
             .then((response) => ({ models: response.models, error: undefined }))
             .catch((error: unknown) => ({ models: [] as string[], error: errorText(error) })),
@@ -150,6 +154,7 @@ export default function App() {
             stats,
             directories: directories.directories,
             sessions: sessions.sessions,
+            projects: projects.projects,
             availableModels: models.models,
             modelLoadError: models.error,
           },
@@ -212,6 +217,14 @@ export default function App() {
     filteredSessions.find((session) => session.id === browseState.selectedSessionId) ??
     filteredSessions[0] ??
     null;
+  const selectedProject = useMemo(
+    () =>
+      data?.projects.find((project) => project.path === selectedSession?.directory) ??
+      data?.projects.find((project) => project.path === browseState.selectedDirectory) ??
+      data?.projects[0] ??
+      null,
+    [browseState.selectedDirectory, data?.projects, selectedSession?.directory],
+  );
   const composerModelOptions = useMemo(
     () => deriveComposerModelOptions(visibleModelOptions, selectedSession?.model ?? ""),
     [selectedSession?.model, visibleModelOptions],
@@ -275,8 +288,13 @@ export default function App() {
   }
 
   function refreshDashboard(selectSessionId?: string) {
-    return Promise.all([getStats(), getDirectories(), getSessions({ limit: 200 })])
-      .then(([stats, directories, sessions]) => {
+    return Promise.all([
+      getStats(),
+      getDirectories(),
+      getSessions({ limit: 200 }),
+      getWorkspaceProjects(50),
+    ])
+      .then(([stats, directories, sessions, projects]) => {
         setLoadState((current) => {
           const previous = current.status === "ready" ? current.data : null;
           return {
@@ -285,6 +303,7 @@ export default function App() {
               stats,
               directories: directories.directories,
               sessions: sessions.sessions,
+              projects: projects.projects,
               availableModels: previous?.availableModels ?? [],
               modelLoadError: previous?.modelLoadError,
             },
@@ -983,6 +1002,13 @@ export default function App() {
             </section>
 
             <div className="overview-column" aria-label="Session overview">
+              <WorkspacePanel
+                project={selectedProject}
+                projects={data.projects}
+                onSelectProject={(path) => dispatch({ type: "selectDirectory", value: path })}
+                onSelectSession={(sessionId) => dispatch({ type: "selectSession", value: sessionId })}
+              />
+
               <section className="detail-panel">
                 <div className="panel-heading">
                   <h3>Session</h3>
@@ -1164,6 +1190,100 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function WorkspacePanel({
+  project,
+  projects,
+  onSelectProject,
+  onSelectSession,
+}: {
+  project: ProjectWorkspace | null;
+  projects: ProjectWorkspace[];
+  onSelectProject: (path: string) => void;
+  onSelectSession: (sessionId: string) => void;
+}) {
+  return (
+    <section className="detail-panel workspace-panel" aria-label="Project workspace">
+      <div className="panel-heading">
+        <h3>Workspace</h3>
+        <span>{formatNumber(projects.length)} projects</span>
+      </div>
+      {project ? (
+        <>
+          <div className="workspace-project-header">
+            <div>
+              <p className="eyebrow">Active project</p>
+              <h4>{project.name}</h4>
+              <p>{project.path}</p>
+            </div>
+            <select
+              aria-label="Switch workspace project"
+              className="workspace-project-select"
+              value={project.path}
+              onChange={(event) => onSelectProject(event.target.value)}
+            >
+              {projects.map((item) => (
+                <option key={item.path} value={item.path}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="workspace-metrics">
+            <SummaryItem label="Sessions" value={formatNumber(project.session_count)} />
+            <SummaryItem label="Messages" value={formatNumber(project.message_count)} />
+            <SummaryItem label="Input" value={formatTokens(project.tokens_input)} />
+            <SummaryItem label="Output" value={formatTokens(project.tokens_output)} />
+          </div>
+          <dl className="detail-list compact">
+            <div>
+              <dt>Updated</dt>
+              <dd>{project.last_active || "N/A"}</dd>
+            </div>
+            <div>
+              <dt>Cost</dt>
+              <dd>${project.cost.toFixed(6)}</dd>
+            </div>
+            <div>
+              <dt>Top models</dt>
+              <dd className="value-stack">
+                {project.top_models.length > 0
+                  ? project.top_models.map((model) => (
+                      <span key={model.model}>
+                        {model.model || "N/A"} · {formatNumber(model.count)}
+                      </span>
+                    ))
+                  : "N/A"}
+              </dd>
+            </div>
+          </dl>
+          <div className="workspace-recent">
+            <h4>Recent project sessions</h4>
+            {project.recent_sessions.length > 0 ? (
+              <div className="recent-session-list">
+                {project.recent_sessions.map((session) => (
+                  <button
+                    className="recent-session-row"
+                    key={session.id}
+                    type="button"
+                    onClick={() => onSelectSession(session.id)}
+                  >
+                    <span>{session.title || "Untitled session"}</span>
+                    <span>{session.time_updated}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <PanelStatus label="No project sessions" />
+            )}
+          </div>
+        </>
+      ) : (
+        <PanelStatus label="No project activity" />
+      )}
+    </section>
   );
 }
 

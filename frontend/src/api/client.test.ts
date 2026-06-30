@@ -9,6 +9,7 @@ import {
   getSession,
   getSessionStreamUrl,
   getSessions,
+  getWorkspaceProjects,
   undoSession,
 } from "./client";
 
@@ -68,6 +69,19 @@ describe("api client", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/api/sessions/compare?id1=ses%2Fone&id2=ses+two",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("loads workspace project summaries with a bounded limit", async () => {
+    mockJsonResponse({ projects: [], total: 0 });
+
+    await getWorkspaceProjects(25);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/workspace/projects?limit=25",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),

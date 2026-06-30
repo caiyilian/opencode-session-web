@@ -17,6 +17,8 @@ test("browses, searches, opens a session, and keeps composer reachable", async (
     "Choose two sessions and compare",
   );
   await expect(page.locator(".compare-panel .panel-status")).toHaveAttribute("role", "status");
+  await expect(page.locator(".workspace-panel")).toContainText("Workspace");
+  await expect(page.locator(".workspace-panel")).toContainText("Active project");
 
   await search.fill("__missing_session__");
   await expect(page.locator(".session-list .status-block")).toHaveText("No sessions");

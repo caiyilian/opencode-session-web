@@ -42,10 +42,17 @@ def test_frontend_api_client_scaffold_exports_core_helpers():
         "getSessions",
         "getSession",
         "getAvailableModels",
+        "getWorkspaceProjects",
     ]:
         assert f"function {helper}" in client_source
 
-    for type_name in ["StatsResponse", "SessionSummary", "SessionDetailResponse", "MessagePart"]:
+    for type_name in [
+        "StatsResponse",
+        "SessionSummary",
+        "SessionDetailResponse",
+        "MessagePart",
+        "ProjectWorkspace",
+    ]:
         assert f"interface {type_name}" in types_source or f"type {type_name}" in types_source
 
     assert 'export * from "./client"' in index_source
@@ -66,6 +73,8 @@ def test_react_app_loads_core_api_data():
     assert 'status: "error"' in app_source
     assert "OpenCode Sessions" in app_source
     assert "Collapse sidebar" in app_source
+    assert "WorkspacePanel" in app_source
+    assert "Project workspace" in app_source
     assert "MessageTimeline" in app_source
     assert "SessionComposer" in app_source
     assert "NewSessionPanel" in app_source

@@ -175,3 +175,36 @@ export interface MutationResponse {
   status?: string;
   message?: string;
 }
+
+export interface ProjectModelSummary {
+  model: string;
+  count: number;
+}
+
+export interface ProjectRecentSession {
+  id: string;
+  title: string;
+  model: string;
+  time_updated: string;
+  time_updated_raw: number;
+}
+
+export interface ProjectWorkspace {
+  path: string;
+  name: string;
+  session_count: number;
+  message_count: number;
+  first_active_raw: number;
+  last_active_raw: number;
+  last_active: string;
+  cost: number;
+  tokens_input: number;
+  tokens_output: number;
+  top_models: ProjectModelSummary[];
+  recent_sessions: ProjectRecentSession[];
+}
+
+export interface WorkspaceProjectsResponse {
+  projects: ProjectWorkspace[];
+  total: number;
+}

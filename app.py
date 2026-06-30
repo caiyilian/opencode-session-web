@@ -20,6 +20,7 @@ from db import (
 from logging_config import configure_logging
 from repositories.session_queries import (
     fetch_message_detail,
+    fetch_project_workspaces,
     fetch_session_detail,
     fetch_session_list,
     fetch_session_messages_with_parts,
@@ -501,6 +502,51 @@ def api_directories():
         })
 
     return jsonify({"directories": dirs})
+
+
+@app.route("/api/workspace/projects")
+def api_workspace_projects():
+    """Return project-level workspace summaries."""
+    limit = _bounded_int_arg("limit", 50, minimum=1, maximum=200)
+    conn = get_db()
+    projects = fetch_project_workspaces(conn, limit=limit)
+    conn.close()
+
+    return jsonify({
+        "projects": [
+            {
+                "path": item["row"]["directory"],
+                "name": get_project_name(item["row"]["directory"]),
+                "session_count": item["row"]["session_count"] or 0,
+                "message_count": item["row"]["message_count"] or 0,
+                "first_active_raw": item["row"]["first_active"] or 0,
+                "last_active_raw": item["row"]["last_active"] or 0,
+                "last_active": format_time(item["row"]["last_active"]),
+                "cost": round(item["row"]["cost"] or 0, 6),
+                "tokens_input": item["row"]["tokens_input"] or 0,
+                "tokens_output": item["row"]["tokens_output"] or 0,
+                "top_models": [
+                    {
+                        "model": format_model(model_row["model"]),
+                        "count": model_row["count"] or 0,
+                    }
+                    for model_row in item["top_models"]
+                ],
+                "recent_sessions": [
+                    {
+                        "id": session_row["id"],
+                        "title": session_row["title"],
+                        "model": format_model(session_row["model"]),
+                        "time_updated": format_time(session_row["time_updated"]),
+                        "time_updated_raw": session_row["time_updated"] or 0,
+                    }
+                    for session_row in item["recent_sessions"]
+                ],
+            }
+            for item in projects
+        ],
+        "total": len(projects),
+    })
 
 
 @app.route("/api/models")
