@@ -58,6 +58,9 @@ def test_workspace_task_report_includes_sessions_and_validation_runs(tmp_path):
     assert "# Reportable task" in markdown
     assert "`ses_report` Linked session" in markdown
     assert "report output" in markdown
+    assert "## Delivery Summary" in markdown
+    assert "## PR Description Draft" in markdown
+    assert "## Acceptance Notes" in markdown
     assert "## Task Timeline" in markdown
     assert events.status_code == 200
     assert events.get_json()["total"] >= 2

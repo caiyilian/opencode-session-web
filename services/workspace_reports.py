@@ -9,6 +9,13 @@ def build_task_report(
     git_snapshot: dict[str, Any] | None,
     task_events: list[dict[str, Any]] | None = None,
 ) -> str:
+    latest_run = command_runs[0] if command_runs else None
+    git_dirty_count = 0
+    git_branch = ""
+    if git_snapshot and git_snapshot.get("is_git_repo"):
+        git_dirty_count = int(git_snapshot.get("dirty_count") or 0)
+        git_branch = str(git_snapshot.get("branch") or "detached")
+
     lines = [
         f"# {task['title']}",
         "",
@@ -17,6 +24,49 @@ def build_task_report(
     ]
     if task.get("description"):
         lines.extend(["", "## Description", "", task["description"]])
+
+    lines.extend(
+        [
+            "",
+            "## Delivery Summary",
+            "",
+            f"- Task status: {task['status']}",
+            f"- Linked sessions: {len(linked_sessions)}",
+            f"- Validation runs: {len(command_runs)}",
+        ]
+    )
+    if latest_run:
+        exit_code = "no exit code" if latest_run.get("exit_code") is None else f"exit {latest_run['exit_code']}"
+        lines.append(
+            f"- Latest validation: {latest_run['command_label']} {latest_run['status']} ({exit_code})"
+        )
+    if git_snapshot and git_snapshot.get("is_git_repo"):
+        lines.append(f"- Git snapshot: {git_branch}, {git_dirty_count} dirty files")
+    elif git_snapshot:
+        lines.append(f"- Git snapshot: {git_snapshot.get('error') or 'Project is not a Git repository'}")
+    else:
+        lines.append("- Git snapshot: unavailable")
+
+    lines.extend(["", "## PR Description Draft", "", "### Summary"])
+    lines.append(f"- {task['title']}")
+    if task.get("description"):
+        lines.append(f"- {task['description']}")
+    lines.extend(["", "### Validation"])
+    if command_runs:
+        for run in command_runs[:5]:
+            exit_code = "no exit code" if run.get("exit_code") is None else f"exit {run['exit_code']}"
+            lines.append(f"- {run['command_label']}: {run['status']} ({exit_code})")
+    else:
+        lines.append("- Not run")
+
+    lines.extend(["", "## Acceptance Notes"])
+    lines.append("- [x] Workspace task and linked sessions reviewed")
+    lines.append("- [x] Git snapshot captured" if git_snapshot else "- [ ] Git snapshot captured")
+    lines.append(
+        "- [x] Validation evidence recorded"
+        if command_runs
+        else "- [ ] Validation evidence recorded"
+    )
 
     lines.extend(["", "## Linked Sessions"])
     if linked_sessions:
