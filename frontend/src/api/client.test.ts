@@ -10,6 +10,7 @@ import {
   getSession,
   getSessionStreamUrl,
   getSessions,
+  getWorkspaceGit,
   getWorkspaceTasks,
   getWorkspaceProjects,
   updateWorkspaceTask,
@@ -126,6 +127,19 @@ describe("api client", () => {
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({ status: "done" }),
+      }),
+    );
+  });
+
+  it("loads workspace git snapshots for encoded project paths", async () => {
+    mockJsonResponse({ git: { is_git_repo: false } });
+
+    await getWorkspaceGit("C:/repo/app with space");
+
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/git?project_path=C%3A%2Frepo%2Fapp+with+space",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
   });

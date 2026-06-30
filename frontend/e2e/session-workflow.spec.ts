@@ -20,6 +20,7 @@ test("browses, searches, opens a session, and keeps composer reachable", async (
   await expect(page.locator(".workspace-panel")).toContainText("Workspace");
   await expect(page.locator(".workspace-panel")).toContainText("Active project");
   await expect(page.locator(".task-panel")).toContainText("Project Tasks");
+  await expect(page.locator(".git-panel")).toContainText("Git Snapshot");
 
   if (!isMobile) {
     await page.locator(".task-create-form input").fill("Prepare workspace task");

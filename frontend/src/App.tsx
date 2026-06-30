@@ -22,6 +22,7 @@ import {
   getSessionStreamUrl,
   getSessions,
   getStats,
+  getWorkspaceGit,
   getWorkspaceProjects,
   getWorkspaceTasks,
   undoSession,
@@ -35,6 +36,7 @@ import {
   type SessionMessage,
   type SessionSummary,
   type StatsResponse,
+  type WorkspaceGitSnapshot,
   type WorkspaceTask,
   type WorkspaceTaskStatus,
 } from "./api";
@@ -100,6 +102,12 @@ type SessionActionState =
   | { status: "success"; message: string }
   | { status: "error"; message: string };
 
+type GitState =
+  | { status: "idle" }
+  | { status: "loading"; projectPath: string }
+  | { status: "ready"; projectPath: string; data: WorkspaceGitSnapshot }
+  | { status: "error"; projectPath: string; message: string };
+
 type StreamStatus = "connecting" | "streaming" | "done" | "error" | "stopped";
 
 interface SessionFilters {
@@ -145,6 +153,7 @@ export default function App() {
   const [taskDraftTitle, setTaskDraftTitle] = useState("");
   const [taskError, setTaskError] = useState("");
   const [taskBusyId, setTaskBusyId] = useState("");
+  const [gitState, setGitState] = useState<GitState>({ status: "idle" });
   const eventSourceRef = useRef<EventSource | null>(null);
   const newSessionAbortRef = useRef<AbortController | null>(null);
   const forkAbortRef = useRef<AbortController | null>(null);
@@ -295,6 +304,28 @@ export default function App() {
       return composerModelOptions[0] ?? "";
     });
   }, [composerModelOptions, selectedSession?.id]);
+
+  useEffect(() => {
+    if (!selectedProject) {
+      setGitState({ status: "idle" });
+      return;
+    }
+
+    let mounted = true;
+    const projectPath = selectedProject.path;
+    setGitState({ status: "loading", projectPath });
+    getWorkspaceGit(projectPath)
+      .then((response) => {
+        if (mounted) setGitState({ status: "ready", projectPath, data: response.git });
+      })
+      .catch((error: unknown) => {
+        if (mounted) setGitState({ status: "error", projectPath, message: errorText(error) });
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [selectedProject?.path]);
 
   const activeFilterCount = [filters.query.trim(), filters.directory, filters.model].filter(
     Boolean,
@@ -1090,6 +1121,7 @@ export default function App() {
                 onCreate={createTaskForSelectedProject}
                 onStatusChange={updateProjectTaskStatus}
               />
+              <GitSnapshotPanel state={gitState} />
 
               <section className="detail-panel">
                 <div className="panel-heading">
@@ -1463,6 +1495,71 @@ function ProjectTasksPanel({
           <PanelStatus label={project ? "No tasks for this project" : "No project selected"} />
         )}
       </div>
+    </section>
+  );
+}
+
+function GitSnapshotPanel({ state }: { state: GitState }) {
+  return (
+    <section className="detail-panel git-panel" aria-label="Git snapshot">
+      <div className="panel-heading">
+        <h3>Git Snapshot</h3>
+        <span>{state.status === "ready" && state.data.is_git_repo ? state.data.branch : "read only"}</span>
+      </div>
+      {state.status === "idle" && <PanelStatus label="No project selected" />}
+      {state.status === "loading" && <PanelStatus label="Loading Git status" />}
+      {state.status === "error" && <PanelStatus label={state.message} tone="error" />}
+      {state.status === "ready" && !state.data.is_git_repo && (
+        <PanelStatus label={state.data.error || "Project is not a Git repository"} />
+      )}
+      {state.status === "ready" && state.data.is_git_repo && (
+        <>
+          <dl className="detail-list compact">
+            <div>
+              <dt>Branch</dt>
+              <dd>{state.data.branch || "detached"}</dd>
+            </div>
+            <div>
+              <dt>Repo root</dt>
+              <dd>{state.data.repo_root}</dd>
+            </div>
+            <div>
+              <dt>Dirty files</dt>
+              <dd>{formatNumber(state.data.dirty_count)}</dd>
+            </div>
+          </dl>
+          <div className="git-section">
+            <h4>Changed files</h4>
+            {state.data.files.length > 0 ? (
+              <div className="git-file-list">
+                {state.data.files.slice(0, 8).map((file) => (
+                  <div className="git-file-row" key={`${file.status}-${file.path}`}>
+                    <span>{file.status}</span>
+                    <strong>{file.path}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <PanelStatus label="Working tree clean" />
+            )}
+          </div>
+          <div className="git-section">
+            <h4>Recent commits</h4>
+            {state.data.recent_commits.length > 0 ? (
+              <div className="git-commit-list">
+                {state.data.recent_commits.map((commit) => (
+                  <div className="git-commit-row" key={commit.sha}>
+                    <span>{commit.sha}</span>
+                    <strong>{commit.subject}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <PanelStatus label="No commits" />
+            )}
+          </div>
+        </>
+      )}
     </section>
   );
 }
