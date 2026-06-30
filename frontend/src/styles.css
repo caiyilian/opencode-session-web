@@ -911,6 +911,53 @@ textarea:focus-visible {
   word-break: break-word;
 }
 
+.task-event-list {
+  display: grid;
+  gap: 8px;
+}
+
+.task-event-list h4 {
+  color: #374151;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.task-event-row {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e3e8f0;
+  border-radius: 6px;
+  padding: 8px;
+  background: #f8fafc;
+}
+
+.task-event-row div {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+}
+
+.task-event-row strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.task-event-row span,
+.task-event-row p {
+  color: #697385;
+  font-size: 11px;
+}
+
+.task-event-row p {
+  margin: 0;
+}
+
 .task-link-note {
   display: flex;
   min-width: 0;

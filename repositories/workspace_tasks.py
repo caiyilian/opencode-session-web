@@ -59,6 +59,19 @@ def init_workspace_db(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_workspace_command_run_task ON workspace_command_run(task_id, created_at)"
     )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS workspace_task_event (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            payload TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL
+        )"""
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workspace_task_event_task ON workspace_task_event(task_id, created_at)"
+    )
     conn.commit()
 
 
@@ -269,6 +282,61 @@ def serialize_command_run(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def record_task_event(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    event_type: str,
+    title: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    event_id = f"event_{uuid.uuid4().hex}"
+    created_at = _now_ms()
+    conn.execute(
+        """INSERT INTO workspace_task_event
+           (id, task_id, event_type, title, payload, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (
+            event_id,
+            str(task_id or "").strip(),
+            str(event_type or "").strip(),
+            str(title or "").strip(),
+            json.dumps(payload or {}, ensure_ascii=False),
+            created_at,
+        ),
+    )
+    conn.commit()
+    return get_task_event(conn, event_id)
+
+
+def fetch_task_events(conn: sqlite3.Connection, task_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT *
+           FROM workspace_task_event
+           WHERE task_id = ?
+           ORDER BY created_at DESC
+           LIMIT ?""",
+        (task_id, limit),
+    ).fetchall()
+    return [serialize_task_event(row) for row in rows]
+
+
+def get_task_event(conn: sqlite3.Connection, event_id: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM workspace_task_event WHERE id = ?", (event_id,)).fetchone()
+    return serialize_task_event(row) if row else None
+
+
+def serialize_task_event(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "task_id": row["task_id"],
+        "event_type": row["event_type"],
+        "title": row["title"],
+        "payload": _loads_dict(row["payload"]),
+        "created_at": row["created_at"],
+    }
+
+
 def _normalize_title(value: Any) -> str:
     title = str(value or "").strip()
     if not title:
@@ -306,6 +374,14 @@ def _loads_list(raw: str) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if item]
+
+
+def _loads_dict(raw: str) -> dict[str, Any]:
+    try:
+        value = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _now_ms() -> int:
