@@ -687,6 +687,33 @@ def _fetch_linked_sessions(session_ids):
     ]
 
 
+def _workspace_task_exists(task_id):
+    if not task_id:
+        return True
+    conn = get_workspace_db()
+    try:
+        return get_task(conn, task_id) is not None
+    finally:
+        conn.close()
+
+
+def _link_workspace_task_session(task_id, session_id):
+    if not task_id or not session_id:
+        return False
+    conn = get_workspace_db()
+    try:
+        task = get_task(conn, task_id)
+        if not task:
+            return False
+        linked_ids = list(task["linked_session_ids"])
+        if session_id not in linked_ids:
+            linked_ids.append(session_id)
+            update_task(conn, task_id, {"linked_session_ids": linked_ids})
+        return True
+    finally:
+        conn.close()
+
+
 @app.route("/api/workspace/git")
 def api_workspace_git():
     project_path = request.args.get("project_path", "").strip()
@@ -1006,6 +1033,9 @@ def api_session_stream(session_id):
         return jsonify({"error": "消息不能为空"}), 400
 
     model = request.args.get("model", "").strip()
+    task_id = request.args.get("task_id", "").strip()
+    if task_id and not _workspace_task_exists(task_id):
+        return jsonify({"error": "任务不存在"}), 404
 
     # 从 DB 读取会话信息，获取工作目录
     conn = get_db()
@@ -1041,7 +1071,8 @@ def api_session_stream(session_id):
             yield sse.stream_error(str(e))
         finally:
             if not had_error:
-                yield sse.done({"session_id": session_id})
+                _link_workspace_task_session(task_id, session_id)
+                yield sse.done({"session_id": session_id, "task_id": task_id})
 
     return Response(
         stream_with_context(generate()),
@@ -1068,11 +1099,14 @@ def api_session_new():
     directory = (data.get("directory") or "").strip()
     message = (data.get("message") or "").strip()
     model = (data.get("model") or "").strip()
+    task_id = (data.get("task_id") or "").strip()
 
     if not message:
         return jsonify({"error": "消息不能为空"}), 400
     if not directory or not os.path.isdir(directory):
         return jsonify({"error": "无效的工作目录"}), 400
+    if task_id and not _workspace_task_exists(task_id):
+        return jsonify({"error": "任务不存在"}), 404
 
     def generate():
         new_session_id = None
@@ -1215,7 +1249,9 @@ def api_session_new():
             if stderr_thread2:
                 stderr_thread2.join(timeout=2)
             if not had_error:
-                yield sse.done({"session_id": new_session_id or ""})
+                if new_session_id:
+                    _link_workspace_task_session(task_id, new_session_id)
+                yield sse.done({"session_id": new_session_id or "", "task_id": task_id})
 
     return Response(
         stream_with_context(generate()),
@@ -1363,9 +1399,12 @@ def api_session_fork(session_id):
     data = request.get_json(silent=True) or {}
     message = (data.get("message") or "").strip()
     model = (data.get("model") or "").strip()
+    task_id = (data.get("task_id") or "").strip()
 
     if not message:
         return jsonify({"error": "消息不能为空"}), 400
+    if task_id and not _workspace_task_exists(task_id):
+        return jsonify({"error": "任务不存在"}), 404
 
     # 读取原会话的工作目录
     conn = get_db()
@@ -1377,6 +1416,7 @@ def api_session_fork(session_id):
 
     def generate():
         new_session_id = None
+        had_error = False
         proc = None
         stderr_thread = None
         stdout_thread3 = None
@@ -1434,10 +1474,12 @@ def api_session_fork(session_id):
                         if is_known_error_text(combined) or not has_output:
                             terminate_fork_process()
                             err_text = "\n".join(recent_stderr[-5:])
+                            had_error = True
                             yield sse.stream_error(safe_truncate(format_stream_error_message(err_text)))
                             return
                     if has_output and (time.time() - last_output_time > 120):
                         terminate_fork_process()
+                        had_error = True
                         yield sse.stream_error("请求超时（120 秒无输出）")
                         return
                     continue
@@ -1457,6 +1499,7 @@ def api_session_fork(session_id):
                         if "stream_error" in sse_event:
                             logger.warning("fork-session stream error detected: %s", line[:200])
                             terminate_fork_process()
+                            had_error = True
                             yield sse_event
                             return
                         yield sse_event
@@ -1467,6 +1510,7 @@ def api_session_fork(session_id):
                     if non_json and len(non_json) > 5:
                         if is_known_error_text(non_json):
                             terminate_fork_process()
+                            had_error = True
                             yield sse.stream_error(safe_truncate(format_stream_error_message(non_json)))
                             return
 
@@ -1476,16 +1520,20 @@ def api_session_fork(session_id):
                 recent_stderr = list(stderr_lines[-10:])
             if recent_stderr:
                 err_text = "\n".join(recent_stderr)
+                had_error = True
                 yield sse.stream_error(safe_truncate(format_stream_error_message(err_text)))
             stderr_thread.join(timeout=2)
 
         except FileNotFoundError:
+            had_error = True
             yield sse.stream_error("opencode CLI 未找到")
         except subprocess.TimeoutExpired:
+            had_error = True
             if proc:
                 process_manager.terminate(proc, timeout=2)
             yield sse.stream_error("请求超时")
         except Exception as e:
+            had_error = True
             yield sse.stream_error(str(e))
         finally:
             if proc:
@@ -1494,7 +1542,10 @@ def api_session_fork(session_id):
                 stdout_thread3.join(timeout=2)
             if stderr_thread:
                 stderr_thread.join(timeout=2)
-            yield sse.done({"session_id": new_session_id or ""})
+            if not had_error:
+                if new_session_id:
+                    _link_workspace_task_session(task_id, new_session_id)
+                yield sse.done({"session_id": new_session_id or "", "task_id": task_id})
 
     return Response(
         stream_with_context(generate()),

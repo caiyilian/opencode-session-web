@@ -40,17 +40,20 @@ export interface SessionsQuery {
 export interface SessionStreamQuery {
   message: string;
   model?: string;
+  task_id?: string;
 }
 
 export interface NewSessionStreamRequest {
   directory: string;
   message: string;
   model?: string;
+  task_id?: string;
 }
 
 export interface ForkSessionStreamRequest {
   message: string;
   model?: string;
+  task_id?: string;
 }
 
 export interface WorkspaceTasksQuery {

@@ -200,9 +200,10 @@ describe("api client", () => {
       getSessionStreamUrl("ses/with space", {
         message: "hello world\nnext",
         model: "provider/model",
+        task_id: "task/1",
       }),
     ).toBe(
-      "/api/sessions/ses%2Fwith%20space/stream?message=hello+world%0Anext&model=provider%2Fmodel",
+      "/api/sessions/ses%2Fwith%20space/stream?message=hello+world%0Anext&model=provider%2Fmodel&task_id=task%2F1",
     );
 
     expect(getSessionStreamUrl("ses_1", { message: "hello", model: "" })).toBe(
@@ -240,6 +241,7 @@ describe("api client", () => {
       directory: "C:/repo/app",
       message: "start here",
       model: "provider/model",
+      task_id: "task_1",
     });
 
     expect(fetch).toHaveBeenCalledWith(
@@ -250,6 +252,7 @@ describe("api client", () => {
           directory: "C:/repo/app",
           message: "start here",
           model: "provider/model",
+          task_id: "task_1",
         }),
         headers: expect.objectContaining({
           Accept: "text/event-stream",
@@ -265,6 +268,7 @@ describe("api client", () => {
     await createForkSessionStream("ses/with space", {
       message: "continue from here",
       model: "provider/model",
+      task_id: "task_1",
     });
 
     expect(fetch).toHaveBeenCalledWith(
@@ -274,6 +278,7 @@ describe("api client", () => {
         body: JSON.stringify({
           message: "continue from here",
           model: "provider/model",
+          task_id: "task_1",
         }),
         headers: expect.objectContaining({
           Accept: "text/event-stream",

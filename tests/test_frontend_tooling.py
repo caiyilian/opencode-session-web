@@ -92,6 +92,8 @@ def test_react_app_loads_core_api_data():
     assert "Project Tasks" in app_source
     assert "Task Report" in app_source
     assert "task-report-preview" in app_source
+    assert "task-opencode-actions" in app_source
+    assert "buildWorkspaceTaskMessage" in app_source
     assert "GitSnapshotPanel" in app_source
     assert "Git Snapshot" in app_source
     assert "ValidationRunsPanel" in app_source

@@ -26,7 +26,11 @@ test("browses, searches, opens a session, and keeps composer reachable", async (
     await page.locator(".task-create-form input").fill("Prepare workspace task");
     await page.locator(".task-create-form button").click();
     await expect(page.locator(".task-row")).toContainText("Prepare workspace task");
-    await page.locator(".task-row select").selectOption("done");
+    const createdTask = page.locator(".task-row").filter({ hasText: "Prepare workspace task" }).first();
+    await createdTask.getByRole("button", { name: "Continue" }).click();
+    await expect(page.locator(".composer-panel")).toContainText("Task link: Prepare workspace task");
+    await expect(page.locator(".composer-panel textarea")).toHaveValue(/Workspace task: Prepare workspace task/);
+    await createdTask.locator("select").selectOption("done");
     await expect(page.locator(".task-row")).toContainText("Done");
     await page.locator(".validation-controls button").click();
     await expect(page.locator(".validation-run-row")).toContainText("Quick Check");

@@ -7,7 +7,7 @@ OpenCode 会话 Web 管理器是一个 Flask 应用，用于在浏览器中浏�
 - 按项目目录分组浏览会话，并支持标题、目录、模型搜索。
 - 查看完整消息时间线，包括 reasoning、工具调用、工具输出、耗时、token 和成本信息。
 - 继续已有会话、新建会话、Fork 会话、撤销最后一轮、删除会话和对比会话。
-- 使用 Workspace 项目面板查看项目级会话摘要、创建和推进本地任务、查看只读 Git snapshot、运行受控验证命令，并生成任务执行报告。
+- 使用 Workspace 项目面板查看项目级会话摘要、创建和推进本地任务，从任务发起 Continue/New/Fork OpenCode 会话，查看只读 Git snapshot、运行受控验证命令，并生成任务执行报告。
 - 查看用量统计、最近项目、模型/Provider 可用状态，以及加载、空状态、错误状态和移动端布局。
 - 使用临时 SQLite fixture 运行可重复的后端、前端和 Playwright E2E 测试。
 - 监控 OpenCode 数据库更新，并在助手回复完成后发送微信 iLink 通知。
