@@ -52,6 +52,7 @@ def test_frontend_api_client_scaffold_exports_core_helpers():
         "getWorkspaceCommands",
         "getWorkspaceCommandRuns",
         "runWorkspaceCommand",
+        "runWorkspaceCommandStream",
     ]:
         assert f"function {helper}" in client_source
 
@@ -102,6 +103,7 @@ def test_react_app_loads_core_api_data():
     assert "Git Snapshot" in app_source
     assert "ValidationRunsPanel" in app_source
     assert "Validation Runs" in app_source
+    assert "validation-live-run" in app_source
     assert "MessageTimeline" in app_source
     assert "SessionComposer" in app_source
     assert "NewSessionPanel" in app_source

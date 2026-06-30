@@ -1103,6 +1103,33 @@ textarea:focus-visible {
   font-size: 12px;
 }
 
+.validation-live-run {
+  display: grid;
+  gap: 7px;
+  margin: 0 14px 12px;
+  border: 1px solid #c7d7f4;
+  border-left: 4px solid #2864c8;
+  border-radius: 6px;
+  padding: 9px;
+  background: #f4f8ff;
+}
+
+.validation-live-run.done {
+  border-left-color: #16a34a;
+}
+
+.validation-live-run.error {
+  border-color: #fecaca;
+  border-left-color: #b42318;
+  background: #fef2f2;
+}
+
+.validation-live-run p {
+  margin: 0;
+  color: #991b1b;
+  font-size: 12px;
+}
+
 .validation-run-list {
   display: grid;
   gap: 9px;
@@ -1160,7 +1187,8 @@ textarea:focus-visible {
   font-size: 11px;
 }
 
-.validation-run-row pre {
+.validation-run-row pre,
+.validation-live-run pre {
   max-height: 160px;
   margin: 8px 0 0;
   overflow: auto;

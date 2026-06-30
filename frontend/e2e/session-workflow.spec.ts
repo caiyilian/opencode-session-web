@@ -33,8 +33,8 @@ test("browses, searches, opens a session, and keeps composer reachable", async (
     await createdTask.locator("select").selectOption("done");
     await expect(page.locator(".task-row")).toContainText("Done");
     await page.locator(".validation-controls button").click();
-    await expect(page.locator(".validation-run-row")).toContainText("Quick Check");
-    await expect(page.locator(".validation-run-row")).toContainText("workspace validation ok");
+    await expect(page.locator(".validation-live-run")).toContainText("workspace validation ok");
+    await expect(page.locator(".validation-live-run")).toContainText("Passed");
     await page.locator(".task-report-button").first().click();
     await expect(page.locator(".task-report-preview")).toContainText("Prepare workspace task");
     await expect(page.locator(".task-report-preview")).toContainText("workspace validation ok");

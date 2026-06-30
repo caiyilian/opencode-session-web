@@ -28,7 +28,7 @@ import {
   getWorkspaceProjects,
   getWorkspaceTaskReport,
   getWorkspaceTasks,
-  runWorkspaceCommand,
+  runWorkspaceCommandStream,
   undoSession,
   updateWorkspaceTask,
   type DirectorySummary,
@@ -129,6 +129,12 @@ type TaskReportState =
   | { status: "ready"; taskId: string; data: WorkspaceTaskReport }
   | { status: "error"; taskId: string; message: string };
 
+type ValidationStreamState =
+  | { status: "idle" }
+  | { status: "running"; commandLabel: string; output: string }
+  | { status: "done"; commandLabel: string; output: string; run: WorkspaceCommandRun }
+  | { status: "error"; commandLabel: string; output: string; message: string };
+
 type StreamStatus = "connecting" | "streaming" | "done" | "error" | "stopped";
 
 interface SessionFilters {
@@ -181,9 +187,11 @@ export default function App() {
   const [commandTaskId, setCommandTaskId] = useState("");
   const [commandBusy, setCommandBusy] = useState(false);
   const [commandError, setCommandError] = useState("");
+  const [commandStreamState, setCommandStreamState] = useState<ValidationStreamState>({ status: "idle" });
   const eventSourceRef = useRef<EventSource | null>(null);
   const newSessionAbortRef = useRef<AbortController | null>(null);
   const forkAbortRef = useRef<AbortController | null>(null);
+  const commandAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -241,6 +249,7 @@ export default function App() {
       eventSourceRef.current?.close();
       newSessionAbortRef.current?.abort();
       forkAbortRef.current?.abort();
+      commandAbortRef.current?.abort();
     };
   }, []);
 
@@ -451,18 +460,84 @@ export default function App() {
       return;
     }
 
+    const commandLabel =
+      data?.commands.find((command) => command.key === commandKey)?.label ?? commandKey;
+    const controller = new AbortController();
+    commandAbortRef.current = controller;
     setCommandBusy(true);
     setCommandError("");
+    setCommandStreamState({ status: "running", commandLabel, output: "" });
     try {
-      await runWorkspaceCommand({
-        project_path: selectedProject.path,
-        command_key: commandKey,
-        task_id: commandTaskId,
-      });
+      const response = await runWorkspaceCommandStream(
+        {
+          project_path: selectedProject.path,
+          command_key: commandKey,
+          task_id: commandTaskId,
+        },
+        controller.signal,
+      );
+
+      if (!response.ok) {
+        throw new Error(await responseErrorText(response));
+      }
+      if (!response.body) {
+        throw new Error("Streaming response is unavailable.");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let output = "";
+      let completedRun: WorkspaceCommandRun | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() ?? "";
+
+        for (const block of blocks) {
+          const event = parseSseBlock(block);
+          if (!event.type) continue;
+
+          if (event.type === "output") {
+            output += `${event.data}\n`;
+            setCommandStreamState({ status: "running", commandLabel, output });
+          } else if (event.type === "stream_error") {
+            const message = streamErrorText(event.data);
+            setCommandStreamState({ status: "error", commandLabel, output, message });
+            setCommandError(message);
+            return;
+          } else if (event.type === "done") {
+            completedRun = parseCommandRunDonePayload(event.data);
+            if (completedRun) {
+              setCommandStreamState({
+                status: "done",
+                commandLabel,
+                output: completedRun.output || output,
+                run: completedRun,
+              });
+            }
+          }
+        }
+      }
+
+      if (!completedRun) {
+        throw new Error("Validation run did not return a result.");
+      }
       await refreshDashboard();
     } catch (error) {
-      setCommandError(errorText(error));
+      if ((error as { name?: string }).name === "AbortError") return;
+      const message = errorText(error);
+      setCommandStreamState((current) =>
+        current.status === "running"
+          ? { status: "error", commandLabel, output: current.output, message }
+          : { status: "error", commandLabel, output: "", message },
+      );
+      setCommandError(message);
     } finally {
+      if (commandAbortRef.current === controller) commandAbortRef.current = null;
       setCommandBusy(false);
     }
   }
@@ -1292,6 +1367,7 @@ export default function App() {
                 commands={data.commands}
                 error={commandError}
                 runs={selectedProjectCommandRuns}
+                streamState={commandStreamState}
                 taskId={commandTaskId}
                 tasks={selectedProjectTasks}
                 onCommandChange={(value) => {
@@ -1853,6 +1929,7 @@ function ValidationRunsPanel({
   commands,
   error,
   runs,
+  streamState,
   taskId,
   tasks,
   onCommandChange,
@@ -1864,6 +1941,7 @@ function ValidationRunsPanel({
   commands: WorkspaceCommand[];
   error: string;
   runs: WorkspaceCommandRun[];
+  streamState: ValidationStreamState;
   taskId: string;
   tasks: WorkspaceTask[];
   onCommandChange: (value: string) => void;
@@ -1920,6 +1998,29 @@ function ValidationRunsPanel({
         <p className="validation-error" role="alert">
           {error}
         </p>
+      )}
+      {streamState.status !== "idle" && (
+        <article className={`validation-live-run ${streamState.status}`} aria-live="polite">
+          <div className="validation-run-header">
+            <strong>{streamState.commandLabel}</strong>
+            <span>
+              {streamState.status === "running"
+                ? "Running"
+                : streamState.status === "done"
+                  ? COMMAND_RUN_STATUS_LABELS[streamState.run.status] ?? streamState.run.status
+                  : "Error"}
+            </span>
+          </div>
+          {streamState.status === "done" && (
+            <div className="validation-run-meta">
+              <span>{streamState.run.exit_code === null ? "no exit code" : `exit ${streamState.run.exit_code}`}</span>
+              <span>{formatDurationMs(streamState.run.duration_ms)}</span>
+              {streamState.run.task_id && <span>linked task</span>}
+            </div>
+          )}
+          {streamState.status === "error" && <p>{streamState.message}</p>}
+          <pre>{streamState.output.trim() || "(waiting for output)"}</pre>
+        </article>
       )}
       <div className="validation-run-list">
         {runs.length > 0 ? (
@@ -3117,6 +3218,16 @@ function parseDonePayload(data: string): { session_id?: string } {
     return JSON.parse(data || "{}") as { session_id?: string };
   } catch (_) {
     return {};
+  }
+}
+
+function parseCommandRunDonePayload(data: string): WorkspaceCommandRun | null {
+  try {
+    const payload = JSON.parse(data || "{}") as { run?: unknown };
+    const run = objectValue(payload.run);
+    return run ? (run as unknown as WorkspaceCommandRun) : null;
+  } catch (_) {
+    return null;
   }
 }
 
