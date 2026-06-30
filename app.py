@@ -47,9 +47,12 @@ from services.opencode_runner import event_to_sse
 from services.process_manager import ProcessManager
 from services.sync_watcher import diff_session_snapshots, fetch_session_snapshots
 from services.workspace_commands import (
+    CommandExecution,
     find_workspace_command,
     parse_workspace_commands,
+    resolve_workspace_command_cwd,
     run_workspace_command,
+    truncate_command_output,
 )
 from services.workspace_reports import build_task_report
 
@@ -830,43 +833,180 @@ def api_workspace_command_run_create():
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
-    conn = get_workspace_db()
-    run = record_command_run(
-        conn,
+    run = _record_workspace_command_execution(
         project_path=project_path,
         task_id=task_id,
-        command_key=command.key,
-        command_label=command.label,
-        command_argv=command.argv,
-        cwd=result.cwd,
-        status=result.status,
-        exit_code=result.exit_code,
-        duration_ms=result.duration_ms,
-        output=result.output,
-        started_at=result.started_at,
-        finished_at=result.finished_at,
+        command=command,
+        result=result,
     )
-    if task_id:
-        task = get_task(conn, task_id)
-        if task:
-            record_task_event(
-                conn,
-                task_id=task_id,
-                event_type="validation_run_completed",
-                title=f"Validation {command.label} {result.status}",
-                payload={
-                    "run_id": run["id"],
-                    "command_key": command.key,
-                    "command_label": command.label,
-                    "status": result.status,
-                    "exit_code": result.exit_code,
-                    "duration_ms": result.duration_ms,
-                    "git": _read_task_git_snapshot(task),
-                },
-            )
-    conn.close()
     status_code = 201 if result.status == "success" else 200
     return jsonify({"run": run}), status_code
+
+
+@app.route("/api/workspace/command-runs/stream", methods=["POST"])
+def api_workspace_command_run_stream():
+    payload = request.get_json(silent=True) or {}
+    project_path = str(payload.get("project_path") or "").strip()
+    command_key = str(payload.get("command_key") or "").strip()
+    task_id = str(payload.get("task_id") or "").strip()
+    if not project_path:
+        return jsonify({"error": "project_path 参数不能为空"}), 400
+    if not command_key:
+        return jsonify({"error": "command_key 参数不能为空"}), 400
+
+    try:
+        commands = parse_workspace_commands(app.config.get("OPENCODE_WORKSPACE_COMMANDS", []))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    command = find_workspace_command(commands, command_key)
+    if not command:
+        return jsonify({"error": "命令不在白名单中"}), 400
+
+    try:
+        project_root = os.path.abspath(os.path.expanduser(project_path))
+        if not os.path.isdir(project_root):
+            return jsonify({"error": "项目目录不存在"}), 404
+        command_cwd = resolve_workspace_command_cwd(project_root, command.cwd)
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    timeout = int(app.config.get("OPENCODE_WORKSPACE_COMMAND_TIMEOUT", 120))
+
+    def generate():
+        started_at = int(time.time() * 1000)
+        start = time.monotonic()
+        proc = None
+        output_parts = []
+        stdout_thread = None
+        output_queue = queue.Queue()
+
+        try:
+            yield sse.json_event(
+                "started",
+                {
+                    "command_key": command.key,
+                    "command_label": command.label,
+                    "cwd": command_cwd,
+                    "started_at": started_at,
+                },
+            )
+            proc = process_manager.start(
+                command.argv,
+                cwd=command_cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                stdin=subprocess.DEVNULL,
+            )
+
+            def read_output():
+                for line in proc.stdout:
+                    output_queue.put(line)
+                output_queue.put(None)
+
+            stdout_thread = threading.Thread(target=read_output, daemon=True)
+            stdout_thread.start()
+            timed_out = False
+            while True:
+                try:
+                    line = output_queue.get(timeout=1)
+                except queue.Empty:
+                    if time.monotonic() - start > timeout:
+                        timed_out = True
+                        process_manager.terminate(proc, timeout=2)
+                        break
+                    yield sse.status("running")
+                    continue
+                if line is None:
+                    break
+                output_parts.append(line)
+                yield sse.event("output", line.rstrip("\n"))
+
+            exit_code = None
+            if timed_out:
+                status = "timeout"
+            else:
+                proc.wait(timeout=timeout)
+                exit_code = proc.returncode
+                status = "success" if exit_code == 0 else "failed"
+            finished_at = int(time.time() * 1000)
+            result = CommandExecution(
+                status=status,
+                exit_code=exit_code,
+                output=truncate_command_output("".join(output_parts), 20000),
+                duration_ms=int((time.monotonic() - start) * 1000),
+                started_at=started_at,
+                finished_at=finished_at,
+                cwd=command_cwd,
+            )
+            run = _record_workspace_command_execution(
+                project_path=project_path,
+                task_id=task_id,
+                command=command,
+                result=result,
+            )
+            yield sse.done({"run": run})
+        except FileNotFoundError as exc:
+            yield sse.stream_error(str(exc))
+        except Exception as exc:
+            yield sse.stream_error(str(exc))
+        finally:
+            if proc:
+                process_manager.unregister(proc)
+            if stdout_thread:
+                stdout_thread.join(timeout=2)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Connection": "keep-alive", "Cache-Control": "no-cache"},
+    )
+
+
+def _record_workspace_command_execution(*, project_path, task_id, command, result):
+    conn = get_workspace_db()
+    try:
+        run = record_command_run(
+            conn,
+            project_path=project_path,
+            task_id=task_id,
+            command_key=command.key,
+            command_label=command.label,
+            command_argv=command.argv,
+            cwd=result.cwd,
+            status=result.status,
+            exit_code=result.exit_code,
+            duration_ms=result.duration_ms,
+            output=result.output,
+            started_at=result.started_at,
+            finished_at=result.finished_at,
+        )
+        if task_id:
+            task = get_task(conn, task_id)
+            if task:
+                record_task_event(
+                    conn,
+                    task_id=task_id,
+                    event_type="validation_run_completed",
+                    title=f"Validation {command.label} {result.status}",
+                    payload={
+                        "run_id": run["id"],
+                        "command_key": command.key,
+                        "command_label": command.label,
+                        "status": result.status,
+                        "exit_code": result.exit_code,
+                        "duration_ms": result.duration_ms,
+                        "git": _read_task_git_snapshot(task),
+                    },
+                )
+        return run
+    finally:
+        conn.close()
 
 
 @app.route("/api/models")

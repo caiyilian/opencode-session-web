@@ -94,7 +94,7 @@ def run_workspace_command(
     if not os.path.isdir(project_root):
         raise FileNotFoundError("项目目录不存在")
 
-    cwd = _resolve_command_cwd(project_root, command.cwd)
+    cwd = resolve_workspace_command_cwd(project_root, command.cwd)
     started_at = int(time.time() * 1000)
     start = time.monotonic()
     proc = process_manager.start(
@@ -124,7 +124,7 @@ def run_workspace_command(
     return CommandExecution(
         status=status,
         exit_code=exit_code,
-        output=_truncate_output(output, output_limit),
+        output=truncate_command_output(output, output_limit),
         duration_ms=int((time.monotonic() - start) * 1000),
         started_at=started_at,
         finished_at=finished_at,
@@ -132,7 +132,7 @@ def run_workspace_command(
     )
 
 
-def _resolve_command_cwd(project_root: str, relative_cwd: str) -> str:
+def resolve_workspace_command_cwd(project_root: str, relative_cwd: str) -> str:
     candidate = os.path.abspath(os.path.join(project_root, relative_cwd or "."))
     try:
         common = os.path.commonpath([project_root, candidate])
@@ -145,7 +145,7 @@ def _resolve_command_cwd(project_root: str, relative_cwd: str) -> str:
     return candidate
 
 
-def _truncate_output(output: str | bytes | None, limit: int) -> str:
+def truncate_command_output(output: str | bytes | None, limit: int) -> str:
     if output is None:
         return ""
     if isinstance(output, bytes):

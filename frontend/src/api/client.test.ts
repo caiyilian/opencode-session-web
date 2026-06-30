@@ -18,6 +18,7 @@ import {
   getWorkspaceTasks,
   getWorkspaceProjects,
   runWorkspaceCommand,
+  runWorkspaceCommandStream,
   updateWorkspaceTask,
   undoSession,
 } from "./client";
@@ -200,6 +201,28 @@ describe("api client", () => {
           project_path: "C:/repo/app",
           command_key: "test",
           task_id: "task_1",
+        }),
+      }),
+    );
+
+    mockJsonResponse({ ok: true });
+    await runWorkspaceCommandStream({
+      project_path: "C:/repo/app",
+      command_key: "test",
+      task_id: "task_1",
+    });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/command-runs/stream",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          project_path: "C:/repo/app",
+          command_key: "test",
+          task_id: "task_1",
+        }),
+        headers: expect.objectContaining({
+          Accept: "text/event-stream",
+          "Content-Type": "application/json",
         }),
       }),
     );

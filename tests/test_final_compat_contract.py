@@ -26,6 +26,7 @@ def test_final_user_workflow_routes_remain_registered():
         "/api/workspace/git": {"GET"},
         "/api/workspace/commands": {"GET"},
         "/api/workspace/command-runs": {"GET", "POST"},
+        "/api/workspace/command-runs/stream": {"POST"},
         "/api/models": {"GET"},
         "/api/available-models": {"GET"},
         "/api/sessions/compare": {"GET"},

@@ -48,6 +48,55 @@ def test_workspace_command_run_records_success(tmp_path):
         assert history.get_json()["runs"][0]["id"] == run["id"]
 
 
+def test_workspace_command_run_stream_records_success_and_events(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    workspace_db = tmp_path / "workspace.db"
+    app = webapp.create_app(
+        {
+            "TESTING": True,
+            "OPENCODE_WORKSPACE_DB_PATH": str(workspace_db),
+            "OPENCODE_WORKSPACE_COMMANDS": [
+                {
+                    "key": "check",
+                    "label": "Check project",
+                    "argv": [sys.executable, "-c", "print('stream workspace ok')"],
+                    "cwd": ".",
+                }
+            ],
+        }
+    )
+
+    with app.test_client() as client:
+        task = client.post(
+            "/api/workspace/tasks",
+            json={"title": "Stream validation task", "project_path": str(project)},
+        ).get_json()["task"]
+        streamed = client.post(
+            "/api/workspace/command-runs/stream",
+            json={
+                "project_path": str(project),
+                "command_key": "check",
+                "task_id": task["id"],
+            },
+            buffered=True,
+        )
+        history = client.get("/api/workspace/command-runs", query_string={"task_id": task["id"]})
+        events = client.get(f"/api/workspace/tasks/{task['id']}/events")
+
+    body = streamed.get_data(as_text=True)
+    assert streamed.status_code == 200
+    assert "event: started" in body
+    assert "event: output" in body
+    assert "stream workspace ok" in body
+    assert "event: done" in body
+    run = history.get_json()["runs"][0]
+    assert run["status"] == "success"
+    assert run["task_id"] == task["id"]
+    assert "stream workspace ok" in run["output"]
+    assert events.get_json()["events"][0]["event_type"] == "validation_run_completed"
+
+
 def test_workspace_command_run_rejects_unknown_command(tmp_path):
     project = tmp_path / "project"
     project.mkdir()

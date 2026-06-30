@@ -51,7 +51,7 @@
 - 项目级配置常用命令：test、build、lint、dev server。
 - 后端通过受控 runner 执行命令并流式输出。
 - React 显示命令运行历史、实时日志、退出码和耗时。
-- 当前基础切片已实现：JSON 白名单、非 shell argv 执行、项目目录内 cwd 约束、运行记录持久化、React 验证面板，并可把任务、关联会话、Git snapshot 和验证输出生成 Markdown 执行报告。下一步继续把输出从同步返回升级为实时流式输出。
+- 当前基础切片已实现：JSON 白名单、非 shell argv 执行、项目目录内 cwd 约束、运行记录持久化、React 验证面板、实时流式输出，并可把任务、关联会话、Git snapshot 和验证输出生成 Markdown 执行报告。
 
 验收：
 

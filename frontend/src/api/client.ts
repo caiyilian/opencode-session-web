@@ -224,6 +224,15 @@ export function runWorkspaceCommand(payload: RunWorkspaceCommandRequest) {
   });
 }
 
+export function runWorkspaceCommandStream(payload: RunWorkspaceCommandRequest, signal?: AbortSignal) {
+  return fetch("/api/workspace/command-runs/stream", {
+    method: "POST",
+    headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
 export function deleteSession(sessionId: string) {
   return apiRequest<MutationResponse>(`/api/sessions/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
