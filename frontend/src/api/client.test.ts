@@ -5,10 +5,22 @@ import {
   compareSessions,
   createForkSessionStream,
   createNewSessionStream,
+  createWorkspaceTask,
   deleteSession,
   getSession,
   getSessionStreamUrl,
   getSessions,
+  getWorkspaceGit,
+  getWorkspaceCommands,
+  getWorkspaceCommandRuns,
+  getWorkspaceTaskEvents,
+  getWorkspaceTaskDetail,
+  getWorkspaceTaskReport,
+  getWorkspaceTasks,
+  getWorkspaceProjects,
+  runWorkspaceCommand,
+  runWorkspaceCommandStream,
+  updateWorkspaceTask,
   undoSession,
 } from "./client";
 
@@ -74,14 +86,185 @@ describe("api client", () => {
     );
   });
 
+  it("loads workspace project summaries with a bounded limit", async () => {
+    mockJsonResponse({ projects: [], total: 0 });
+
+    await getWorkspaceProjects(25);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/workspace/projects?limit=25",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("loads, creates, and updates workspace tasks", async () => {
+    mockJsonResponse({ tasks: [], statuses: [], total: 0 });
+    await getWorkspaceTasks({ project_path: "C:/repo/app", status: "todo" });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/tasks?project_path=C%3A%2Frepo%2Fapp&status=todo",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+
+    mockJsonResponse({ task: { id: "task_1" } });
+    await createWorkspaceTask({
+      title: "Review workspace",
+      project_path: "C:/repo/app",
+      linked_session_ids: ["ses_1"],
+    });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/tasks",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          title: "Review workspace",
+          project_path: "C:/repo/app",
+          linked_session_ids: ["ses_1"],
+        }),
+      }),
+    );
+
+    mockJsonResponse({ task: { id: "task_1" } });
+    await updateWorkspaceTask("task/1", { status: "done" });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/tasks/task%2F1",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ status: "done" }),
+      }),
+    );
+
+    mockJsonResponse({ detail: { task: { id: "task_1" } } });
+    await getWorkspaceTaskDetail("task/1");
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/tasks/task%2F1/detail",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+
+    mockJsonResponse({ report: { markdown: "# Task" } });
+    await getWorkspaceTaskReport("task/1");
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/tasks/task%2F1/report",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+
+    mockJsonResponse({ events: [], total: 0 });
+    await getWorkspaceTaskEvents("task/1", { limit: 10 });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/tasks/task%2F1/events?limit=10",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("loads workspace git snapshots for encoded project paths", async () => {
+    mockJsonResponse({ git: { is_git_repo: false } });
+
+    await getWorkspaceGit("C:/repo/app with space");
+
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/git?project_path=C%3A%2Frepo%2Fapp+with+space",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("loads and runs whitelisted workspace commands", async () => {
+    mockJsonResponse({ commands: [] });
+    await getWorkspaceCommands();
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/commands",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+
+    mockJsonResponse({ runs: [], total: 0 });
+    await getWorkspaceCommandRuns({ project_path: "C:/repo/app", limit: 5 });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/command-runs?project_path=C%3A%2Frepo%2Fapp&limit=5",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+
+    mockJsonResponse({ run: { id: "run_1" } });
+    await runWorkspaceCommand({
+      project_path: "C:/repo/app",
+      command_key: "test",
+      task_id: "task_1",
+    });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/command-runs",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          project_path: "C:/repo/app",
+          command_key: "test",
+          task_id: "task_1",
+        }),
+      }),
+    );
+
+    mockJsonResponse({ run: { id: "run_confirmed" } });
+    await runWorkspaceCommand({
+      project_path: "C:/repo/app",
+      command_key: "deploy",
+      confirmed: true,
+    });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/command-runs",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          project_path: "C:/repo/app",
+          command_key: "deploy",
+          confirmed: true,
+        }),
+      }),
+    );
+
+    mockJsonResponse({ ok: true });
+    await runWorkspaceCommandStream({
+      project_path: "C:/repo/app",
+      command_key: "test",
+      task_id: "task_1",
+    });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/workspace/command-runs/stream",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          project_path: "C:/repo/app",
+          command_key: "test",
+          task_id: "task_1",
+        }),
+        headers: expect.objectContaining({
+          Accept: "text/event-stream",
+          "Content-Type": "application/json",
+        }),
+      }),
+    );
+  });
+
   it("builds session stream URLs with encoded message and optional model", () => {
     expect(
       getSessionStreamUrl("ses/with space", {
         message: "hello world\nnext",
         model: "provider/model",
+        task_id: "task/1",
       }),
     ).toBe(
-      "/api/sessions/ses%2Fwith%20space/stream?message=hello+world%0Anext&model=provider%2Fmodel",
+      "/api/sessions/ses%2Fwith%20space/stream?message=hello+world%0Anext&model=provider%2Fmodel&task_id=task%2F1",
     );
 
     expect(getSessionStreamUrl("ses_1", { message: "hello", model: "" })).toBe(
@@ -119,6 +302,7 @@ describe("api client", () => {
       directory: "C:/repo/app",
       message: "start here",
       model: "provider/model",
+      task_id: "task_1",
     });
 
     expect(fetch).toHaveBeenCalledWith(
@@ -129,6 +313,7 @@ describe("api client", () => {
           directory: "C:/repo/app",
           message: "start here",
           model: "provider/model",
+          task_id: "task_1",
         }),
         headers: expect.objectContaining({
           Accept: "text/event-stream",
@@ -144,6 +329,7 @@ describe("api client", () => {
     await createForkSessionStream("ses/with space", {
       message: "continue from here",
       model: "provider/model",
+      task_id: "task_1",
     });
 
     expect(fetch).toHaveBeenCalledWith(
@@ -153,6 +339,7 @@ describe("api client", () => {
         body: JSON.stringify({
           message: "continue from here",
           model: "provider/model",
+          task_id: "task_1",
         }),
         headers: expect.objectContaining({
           Accept: "text/event-stream",

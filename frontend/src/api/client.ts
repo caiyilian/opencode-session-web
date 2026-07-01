@@ -7,6 +7,17 @@ import type {
   SessionsResponse,
   StatsResponse,
   UsedModelsResponse,
+  WorkspaceProjectsResponse,
+  WorkspaceTaskDetailResponse,
+  WorkspaceTaskEventsResponse,
+  WorkspaceTaskResponse,
+  WorkspaceTaskReportResponse,
+  WorkspaceTasksResponse,
+  WorkspaceTaskStatus,
+  WorkspaceGitResponse,
+  WorkspaceCommandRunResponse,
+  WorkspaceCommandRunsResponse,
+  WorkspaceCommandsResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -31,17 +42,58 @@ export interface SessionsQuery {
 export interface SessionStreamQuery {
   message: string;
   model?: string;
+  task_id?: string;
 }
 
 export interface NewSessionStreamRequest {
   directory: string;
   message: string;
   model?: string;
+  task_id?: string;
 }
 
 export interface ForkSessionStreamRequest {
   message: string;
   model?: string;
+  task_id?: string;
+}
+
+export interface WorkspaceTasksQuery {
+  project_path?: string;
+  status?: WorkspaceTaskStatus;
+}
+
+export interface CreateWorkspaceTaskRequest {
+  title: string;
+  description?: string;
+  project_path?: string;
+  status?: WorkspaceTaskStatus;
+  linked_session_ids?: string[];
+}
+
+export interface UpdateWorkspaceTaskRequest {
+  title?: string;
+  description?: string;
+  project_path?: string;
+  status?: WorkspaceTaskStatus;
+  linked_session_ids?: string[];
+}
+
+export interface WorkspaceCommandRunsQuery {
+  project_path?: string;
+  task_id?: string;
+  limit?: number;
+}
+
+export interface WorkspaceTaskEventsQuery {
+  limit?: number;
+}
+
+export interface RunWorkspaceCommandRequest {
+  project_path: string;
+  command_key: string;
+  task_id?: string;
+  confirmed?: boolean;
 }
 
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -117,6 +169,78 @@ export function getUsedModels() {
   return apiRequest<UsedModelsResponse>("/api/models");
 }
 
+export function getWorkspaceProjects(limit = 50) {
+  return apiRequest<WorkspaceProjectsResponse>(`/api/workspace/projects${queryString({ limit })}`);
+}
+
+export function getWorkspaceTasks(query: WorkspaceTasksQuery = {}) {
+  return apiRequest<WorkspaceTasksResponse>(`/api/workspace/tasks${queryString(query)}`);
+}
+
+export function createWorkspaceTask(payload: CreateWorkspaceTaskRequest) {
+  return apiRequest<WorkspaceTaskResponse>("/api/workspace/tasks", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateWorkspaceTask(taskId: string, payload: UpdateWorkspaceTaskRequest) {
+  return apiRequest<WorkspaceTaskResponse>(`/api/workspace/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getWorkspaceTaskDetail(taskId: string) {
+  return apiRequest<WorkspaceTaskDetailResponse>(
+    `/api/workspace/tasks/${encodeURIComponent(taskId)}/detail`,
+  );
+}
+
+export function getWorkspaceTaskReport(taskId: string) {
+  return apiRequest<WorkspaceTaskReportResponse>(
+    `/api/workspace/tasks/${encodeURIComponent(taskId)}/report`,
+  );
+}
+
+export function getWorkspaceTaskEvents(taskId: string, query: WorkspaceTaskEventsQuery = {}) {
+  return apiRequest<WorkspaceTaskEventsResponse>(
+    `/api/workspace/tasks/${encodeURIComponent(taskId)}/events${queryString(query)}`,
+  );
+}
+
+export function getWorkspaceGit(projectPath: string) {
+  return apiRequest<WorkspaceGitResponse>(
+    `/api/workspace/git${queryString({ project_path: projectPath })}`,
+  );
+}
+
+export function getWorkspaceCommands() {
+  return apiRequest<WorkspaceCommandsResponse>("/api/workspace/commands");
+}
+
+export function getWorkspaceCommandRuns(query: WorkspaceCommandRunsQuery = {}) {
+  return apiRequest<WorkspaceCommandRunsResponse>(
+    `/api/workspace/command-runs${queryString(query)}`,
+  );
+}
+
+export function runWorkspaceCommand(payload: RunWorkspaceCommandRequest) {
+  return apiRequest<WorkspaceCommandRunResponse>("/api/workspace/command-runs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function runWorkspaceCommandStream(payload: RunWorkspaceCommandRequest, signal?: AbortSignal) {
+  return fetch("/api/workspace/command-runs/stream", {
+    method: "POST",
+    headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
 export function deleteSession(sessionId: string) {
   return apiRequest<MutationResponse>(`/api/sessions/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
@@ -144,7 +268,14 @@ function errorMessage(payload: unknown): string {
   return "";
 }
 
-function queryString(query: SessionsQuery): string {
+function queryString(
+  query:
+    | SessionsQuery
+    | WorkspaceTasksQuery
+    | WorkspaceCommandRunsQuery
+    | WorkspaceTaskEventsQuery
+    | { project_path: string },
+): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && value !== null && value !== "") {

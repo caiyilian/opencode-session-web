@@ -42,10 +42,35 @@ def test_frontend_api_client_scaffold_exports_core_helpers():
         "getSessions",
         "getSession",
         "getAvailableModels",
+        "getWorkspaceProjects",
+        "getWorkspaceTasks",
+        "createWorkspaceTask",
+        "updateWorkspaceTask",
+        "getWorkspaceTaskDetail",
+        "getWorkspaceTaskEvents",
+        "getWorkspaceTaskReport",
+        "getWorkspaceGit",
+        "getWorkspaceCommands",
+        "getWorkspaceCommandRuns",
+        "runWorkspaceCommand",
+        "runWorkspaceCommandStream",
     ]:
         assert f"function {helper}" in client_source
 
-    for type_name in ["StatsResponse", "SessionSummary", "SessionDetailResponse", "MessagePart"]:
+    for type_name in [
+        "StatsResponse",
+        "SessionSummary",
+        "SessionDetailResponse",
+        "MessagePart",
+        "ProjectWorkspace",
+        "WorkspaceTask",
+        "WorkspaceTaskDetail",
+        "WorkspaceTaskEvent",
+        "WorkspaceTaskReport",
+        "WorkspaceGitSnapshot",
+        "WorkspaceCommand",
+        "WorkspaceCommandRun",
+    ]:
         assert f"interface {type_name}" in types_source or f"type {type_name}" in types_source
 
     assert 'export * from "./client"' in index_source
@@ -66,6 +91,27 @@ def test_react_app_loads_core_api_data():
     assert 'status: "error"' in app_source
     assert "OpenCode Sessions" in app_source
     assert "Collapse sidebar" in app_source
+    assert "WorkspacePanel" in app_source
+    assert "Project workspace" in app_source
+    assert "ProjectTasksPanel" in app_source
+    assert "Project Tasks" in app_source
+    assert "TaskDetailPanel" in app_source
+    assert "Task Detail" in app_source
+    assert "task-detail-actions" in app_source
+    assert "task-detail-panel" in app_source
+    assert "Task Report" in app_source
+    assert "Execution Timeline" in app_source
+    assert "task-event-list" in app_source
+    assert "task-report-preview" in app_source
+    assert "task-opencode-actions" in app_source
+    assert "buildWorkspaceTaskMessage" in app_source
+    assert "GitSnapshotPanel" in app_source
+    assert "Git Snapshot" in app_source
+    assert "ValidationRunsPanel" in app_source
+    assert "Validation Runs" in app_source
+    assert "Confirmation required" in app_source
+    assert "validation-safety-note" in app_source
+    assert "validation-live-run" in app_source
     assert "MessageTimeline" in app_source
     assert "SessionComposer" in app_source
     assert "NewSessionPanel" in app_source

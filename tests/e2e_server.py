@@ -14,8 +14,13 @@ sys.path.insert(0, str(ROOT))
 import app as webapp  # noqa: E402
 
 
-def create_fixture_db(path: Path) -> None:
+def create_fixture_db(path: Path, projects_dir: Path) -> None:
     now = int(time.time() * 1000)
+    alpha_dir = projects_dir / "alpha"
+    beta_dir = projects_dir / "beta"
+    archive_dir = projects_dir / "archive"
+    for directory in (alpha_dir, beta_dir, archive_dir):
+        directory.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.execute(
         """CREATE TABLE session (
@@ -55,7 +60,7 @@ def create_fixture_db(path: Path) -> None:
         (
             "ses_alpha",
             "Alpha release planning",
-            "C:/repo/alpha",
+            str(alpha_dir),
             "provider/model-a",
             now - 20_000,
             now - 1_000,
@@ -66,7 +71,7 @@ def create_fixture_db(path: Path) -> None:
         (
             "ses_beta",
             "Beta error followup",
-            "C:/repo/beta",
+            str(beta_dir),
             "provider/model-b",
             now - 40_000,
             now - 2_000,
@@ -77,7 +82,7 @@ def create_fixture_db(path: Path) -> None:
         (
             "ses_empty",
             "Empty archive session",
-            "C:/repo/archive",
+            str(archive_dir),
             "provider/model-c",
             now - 60_000,
             now - 3_000,
@@ -191,11 +196,22 @@ def main() -> None:
     temp_dir = Path(tempfile.mkdtemp(prefix="opencode-session-web-e2e-"))
     atexit.register(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
     db_path = temp_dir / "opencode.db"
-    create_fixture_db(db_path)
+    projects_dir = temp_dir / "projects"
+    create_fixture_db(db_path, projects_dir)
 
     flask_app = webapp.create_app(
         {
             "OPENCODE_DB_PATH": str(db_path),
+            "OPENCODE_WORKSPACE_DB_PATH": str(temp_dir / "workspace.db"),
+            "OPENCODE_WORKSPACE_COMMANDS": [
+                {
+                    "key": "quick-check",
+                    "label": "Quick Check",
+                    "argv": [sys.executable, "-c", "print('workspace validation ok')"],
+                    "cwd": ".",
+                    "description": "E2E validation command",
+                }
+            ],
             "OPENCODE_USE_FRONTEND_DIST": True,
             "OPENCODE_FRONTEND_DIST_DIR": str(ROOT / "frontend" / "dist"),
             "OPENCODE_WEB_LOG_DIR": str(temp_dir / "logs"),

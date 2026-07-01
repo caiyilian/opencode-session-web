@@ -14,6 +14,7 @@ import {
   compareSessions,
   createForkSessionStream,
   createNewSessionStream,
+  createWorkspaceTask,
   deleteSession,
   getAvailableModels,
   getDirectories,
@@ -21,23 +22,58 @@ import {
   getSessionStreamUrl,
   getSessions,
   getStats,
+  getWorkspaceCommandRuns,
+  getWorkspaceCommands,
+  getWorkspaceGit,
+  getWorkspaceProjects,
+  getWorkspaceTaskDetail,
+  getWorkspaceTaskReport,
+  getWorkspaceTasks,
+  runWorkspaceCommandStream,
   undoSession,
+  updateWorkspaceTask,
   type DirectorySummary,
   type CompareResponse,
   type CompareSession,
   type MessagePart,
+  type ProjectWorkspace,
   type SessionDetailResponse,
   type SessionMessage,
   type SessionSummary,
   type StatsResponse,
+  type WorkspaceCommand,
+  type WorkspaceCommandRun,
+  type WorkspaceGitSnapshot,
+  type WorkspaceTask,
+  type WorkspaceTaskDetail,
+  type WorkspaceTaskEvent,
+  type WorkspaceTaskReport,
+  type WorkspaceTaskStatus,
 } from "./api";
 
 const BLOCKED_PROVIDERS_STORAGE_KEY = "blockedProviders";
+const WORKSPACE_TASK_STATUS_LABELS: Record<WorkspaceTaskStatus, string> = {
+  archived: "Archived",
+  blocked: "Blocked",
+  done: "Done",
+  in_progress: "In progress",
+  todo: "Todo",
+};
+const COMMAND_RUN_STATUS_LABELS: Record<string, string> = {
+  failed: "Failed",
+  success: "Passed",
+  timeout: "Timed out",
+};
 
 interface DashboardData {
   stats: StatsResponse;
   directories: DirectorySummary[];
   sessions: SessionSummary[];
+  projects: ProjectWorkspace[];
+  tasks: WorkspaceTask[];
+  taskStatuses: WorkspaceTaskStatus[];
+  commands: WorkspaceCommand[];
+  commandRuns: WorkspaceCommandRun[];
   availableModels: string[];
   modelLoadError?: string;
 }
@@ -83,6 +119,30 @@ type SessionActionState =
   | { status: "success"; message: string }
   | { status: "error"; message: string };
 
+type GitState =
+  | { status: "idle" }
+  | { status: "loading"; projectPath: string }
+  | { status: "ready"; projectPath: string; data: WorkspaceGitSnapshot }
+  | { status: "error"; projectPath: string; message: string };
+
+type TaskReportState =
+  | { status: "idle" }
+  | { status: "loading"; taskId: string }
+  | { status: "ready"; taskId: string; data: WorkspaceTaskReport }
+  | { status: "error"; taskId: string; message: string };
+
+type TaskDetailState =
+  | { status: "idle" }
+  | { status: "loading"; taskId: string }
+  | { status: "ready"; taskId: string; data: WorkspaceTaskDetail }
+  | { status: "error"; taskId: string; message: string };
+
+type ValidationStreamState =
+  | { status: "idle" }
+  | { status: "running"; commandLabel: string; output: string }
+  | { status: "done"; commandLabel: string; output: string; run: WorkspaceCommandRun }
+  | { status: "error"; commandLabel: string; output: string; message: string };
+
 type StreamStatus = "connecting" | "streaming" | "done" | "error" | "stopped";
 
 interface SessionFilters {
@@ -125,19 +185,37 @@ export default function App() {
   const [forkModel, setForkModel] = useState("");
   const [forkError, setForkError] = useState("");
   const [forkDraft, setForkDraft] = useState<StreamDraft | null>(null);
+  const [taskDraftTitle, setTaskDraftTitle] = useState("");
+  const [taskError, setTaskError] = useState("");
+  const [taskBusyId, setTaskBusyId] = useState("");
+  const [taskDetailState, setTaskDetailState] = useState<TaskDetailState>({ status: "idle" });
+  const [taskReportState, setTaskReportState] = useState<TaskReportState>({ status: "idle" });
+  const [opencodeTaskId, setOpencodeTaskId] = useState("");
+  const [gitState, setGitState] = useState<GitState>({ status: "idle" });
+  const [commandKey, setCommandKey] = useState("");
+  const [commandConfirmed, setCommandConfirmed] = useState(false);
+  const [commandTaskId, setCommandTaskId] = useState("");
+  const [commandBusy, setCommandBusy] = useState(false);
+  const [commandError, setCommandError] = useState("");
+  const [commandStreamState, setCommandStreamState] = useState<ValidationStreamState>({ status: "idle" });
   const eventSourceRef = useRef<EventSource | null>(null);
   const newSessionAbortRef = useRef<AbortController | null>(null);
   const forkAbortRef = useRef<AbortController | null>(null);
+  const commandAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let mounted = true;
 
     async function load() {
       try {
-        const [stats, directories, sessions, models] = await Promise.all([
+        const [stats, directories, sessions, projects, tasks, commands, commandRuns, models] = await Promise.all([
           getStats(),
           getDirectories(),
           getSessions({ limit: 200 }),
+          getWorkspaceProjects(50),
+          getWorkspaceTasks(),
+          getWorkspaceCommands(),
+          getWorkspaceCommandRuns({ limit: 20 }),
           getAvailableModels()
             .then((response) => ({ models: response.models, error: undefined }))
             .catch((error: unknown) => ({ models: [] as string[], error: errorText(error) })),
@@ -150,6 +228,11 @@ export default function App() {
             stats,
             directories: directories.directories,
             sessions: sessions.sessions,
+            projects: projects.projects,
+            tasks: tasks.tasks,
+            taskStatuses: tasks.statuses,
+            commands: commands.commands,
+            commandRuns: commandRuns.runs,
             availableModels: models.models,
             modelLoadError: models.error,
           },
@@ -176,6 +259,7 @@ export default function App() {
       eventSourceRef.current?.close();
       newSessionAbortRef.current?.abort();
       forkAbortRef.current?.abort();
+      commandAbortRef.current?.abort();
     };
   }, []);
 
@@ -212,10 +296,45 @@ export default function App() {
     filteredSessions.find((session) => session.id === browseState.selectedSessionId) ??
     filteredSessions[0] ??
     null;
+  const selectedProject = useMemo(
+    () =>
+      data?.projects.find((project) => project.path === selectedSession?.directory) ??
+      data?.projects.find((project) => project.path === browseState.selectedDirectory) ??
+      data?.projects[0] ??
+      null,
+    [browseState.selectedDirectory, data?.projects, selectedSession?.directory],
+  );
+  const selectedProjectTasks = useMemo(
+    () => data?.tasks.filter((task) => task.project_path === selectedProject?.path) ?? [],
+    [data?.tasks, selectedProject?.path],
+  );
+  const selectedProjectCommandRuns = useMemo(
+    () => data?.commandRuns.filter((run) => run.project_path === selectedProject?.path) ?? [],
+    [data?.commandRuns, selectedProject?.path],
+  );
+  const opencodeTask = useMemo(
+    () => data?.tasks.find((task) => task.id === opencodeTaskId) ?? null,
+    [data?.tasks, opencodeTaskId],
+  );
   const composerModelOptions = useMemo(
     () => deriveComposerModelOptions(visibleModelOptions, selectedSession?.model ?? ""),
     [selectedSession?.model, visibleModelOptions],
   );
+
+  useEffect(() => {
+    const commands = data?.commands ?? [];
+    if (commands.length === 0) {
+      setCommandKey("");
+      return;
+    }
+    if (!commandKey || !commands.some((command) => command.key === commandKey)) {
+      setCommandKey(commands[0].key);
+    }
+  }, [commandKey, data?.commands]);
+
+  useEffect(() => {
+    setCommandConfirmed(false);
+  }, [commandKey, selectedProject?.path]);
 
   useEffect(() => {
     if (!selectedSession) {
@@ -259,6 +378,40 @@ export default function App() {
     });
   }, [composerModelOptions, selectedSession?.id]);
 
+  useEffect(() => {
+    if (!selectedProject) {
+      setGitState({ status: "idle" });
+      return;
+    }
+
+    let mounted = true;
+    const projectPath = selectedProject.path;
+    setGitState({ status: "loading", projectPath });
+    getWorkspaceGit(projectPath)
+      .then((response) => {
+        if (mounted) setGitState({ status: "ready", projectPath, data: response.git });
+      })
+      .catch((error: unknown) => {
+        if (mounted) setGitState({ status: "error", projectPath, message: errorText(error) });
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [selectedProject?.path]);
+
+  useEffect(() => {
+    setTaskDetailState({ status: "idle" });
+    setTaskReportState({ status: "idle" });
+    setOpencodeTaskId("");
+  }, [selectedProject?.path]);
+
+  useEffect(() => {
+    if (opencodeTaskId && !selectedProjectTasks.some((task) => task.id === opencodeTaskId)) {
+      setOpencodeTaskId("");
+    }
+  }, [opencodeTaskId, selectedProjectTasks]);
+
   const activeFilterCount = [filters.query.trim(), filters.directory, filters.model].filter(
     Boolean,
   ).length;
@@ -275,8 +428,16 @@ export default function App() {
   }
 
   function refreshDashboard(selectSessionId?: string) {
-    return Promise.all([getStats(), getDirectories(), getSessions({ limit: 200 })])
-      .then(([stats, directories, sessions]) => {
+    return Promise.all([
+      getStats(),
+      getDirectories(),
+      getSessions({ limit: 200 }),
+      getWorkspaceProjects(50),
+      getWorkspaceTasks(),
+      getWorkspaceCommands(),
+      getWorkspaceCommandRuns({ limit: 20 }),
+    ])
+      .then(([stats, directories, sessions, projects, tasks, commands, commandRuns]) => {
         setLoadState((current) => {
           const previous = current.status === "ready" ? current.data : null;
           return {
@@ -285,6 +446,11 @@ export default function App() {
               stats,
               directories: directories.directories,
               sessions: sessions.sessions,
+              projects: projects.projects,
+              tasks: tasks.tasks,
+              taskStatuses: tasks.statuses,
+              commands: commands.commands,
+              commandRuns: commandRuns.runs,
               availableModels: previous?.availableModels ?? [],
               modelLoadError: previous?.modelLoadError,
             },
@@ -297,6 +463,174 @@ export default function App() {
         setLoadState({ status: "error", message: errorText(error) });
         return [];
       });
+  }
+
+  async function runSelectedWorkspaceCommand() {
+    if (!selectedProject) {
+      setCommandError("Select a project before running a command.");
+      return;
+    }
+    if (!commandKey) {
+      setCommandError("No workspace command is configured.");
+      return;
+    }
+
+    const commandLabel =
+      data?.commands.find((command) => command.key === commandKey)?.label ?? commandKey;
+    const controller = new AbortController();
+    commandAbortRef.current = controller;
+    setCommandBusy(true);
+    setCommandError("");
+    setCommandStreamState({ status: "running", commandLabel, output: "" });
+    try {
+      const response = await runWorkspaceCommandStream(
+        {
+          project_path: selectedProject.path,
+          command_key: commandKey,
+          task_id: commandTaskId,
+          confirmed: commandConfirmed,
+        },
+        controller.signal,
+      );
+
+      if (!response.ok) {
+        throw new Error(await responseErrorText(response));
+      }
+      if (!response.body) {
+        throw new Error("Streaming response is unavailable.");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let output = "";
+      let completedRun: WorkspaceCommandRun | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() ?? "";
+
+        for (const block of blocks) {
+          const event = parseSseBlock(block);
+          if (!event.type) continue;
+
+          if (event.type === "output") {
+            output += `${event.data}\n`;
+            setCommandStreamState({ status: "running", commandLabel, output });
+          } else if (event.type === "stream_error") {
+            const message = streamErrorText(event.data);
+            setCommandStreamState({ status: "error", commandLabel, output, message });
+            setCommandError(message);
+            return;
+          } else if (event.type === "done") {
+            completedRun = parseCommandRunDonePayload(event.data);
+            if (completedRun) {
+              setCommandStreamState({
+                status: "done",
+                commandLabel,
+                output: completedRun.output || output,
+                run: completedRun,
+              });
+            }
+          }
+        }
+      }
+
+      if (!completedRun) {
+        throw new Error("Validation run did not return a result.");
+      }
+      await refreshDashboard();
+      if (
+        completedRun.task_id &&
+        taskDetailState.status !== "idle" &&
+        taskDetailState.taskId === completedRun.task_id
+      ) {
+        const linkedTask = selectedProjectTasks.find((task) => task.id === completedRun?.task_id);
+        if (linkedTask) await loadProjectTaskDetail(linkedTask);
+      }
+    } catch (error) {
+      if ((error as { name?: string }).name === "AbortError") return;
+      const message = errorText(error);
+      setCommandStreamState((current) =>
+        current.status === "running"
+          ? { status: "error", commandLabel, output: current.output, message }
+          : { status: "error", commandLabel, output: "", message },
+      );
+      setCommandError(message);
+    } finally {
+      if (commandAbortRef.current === controller) commandAbortRef.current = null;
+      setCommandBusy(false);
+    }
+  }
+
+  async function createTaskForSelectedProject() {
+    const title = taskDraftTitle.trim();
+    if (!selectedProject) {
+      setTaskError("Select a project before creating a task.");
+      return;
+    }
+    if (!title) {
+      setTaskError("Enter a task title.");
+      return;
+    }
+
+    setTaskBusyId("create");
+    setTaskError("");
+    try {
+      const created = await createWorkspaceTask({
+        title,
+        project_path: selectedProject.path,
+        linked_session_ids: selectedSession ? [selectedSession.id] : [],
+      });
+      setTaskDraftTitle("");
+      setCommandTaskId(created.task.id);
+      setTaskDetailState({ status: "idle" });
+      setTaskReportState({ status: "idle" });
+      await refreshDashboard();
+    } catch (error) {
+      setTaskError(errorText(error));
+    } finally {
+      setTaskBusyId("");
+    }
+  }
+
+  async function loadProjectTaskDetail(task: WorkspaceTask) {
+    setTaskDetailState({ status: "loading", taskId: task.id });
+    try {
+      const response = await getWorkspaceTaskDetail(task.id);
+      setTaskDetailState({ status: "ready", taskId: task.id, data: response.detail });
+    } catch (error) {
+      setTaskDetailState({ status: "error", taskId: task.id, message: errorText(error) });
+    }
+  }
+
+  async function loadProjectTaskReport(task: WorkspaceTask) {
+    setTaskReportState({ status: "loading", taskId: task.id });
+    try {
+      const response = await getWorkspaceTaskReport(task.id);
+      setTaskReportState({ status: "ready", taskId: task.id, data: response.report });
+    } catch (error) {
+      setTaskReportState({ status: "error", taskId: task.id, message: errorText(error) });
+    }
+  }
+
+  async function updateProjectTaskStatus(task: WorkspaceTask, status: WorkspaceTaskStatus) {
+    setTaskBusyId(task.id);
+    setTaskError("");
+    try {
+      const updated = await updateWorkspaceTask(task.id, { status });
+      await refreshDashboard();
+      if (taskDetailState.status !== "idle" && taskDetailState.taskId === task.id) {
+        await loadProjectTaskDetail(updated.task);
+      }
+    } catch (error) {
+      setTaskError(errorText(error));
+    } finally {
+      setTaskBusyId("");
+    }
   }
 
   async function undoSelectedSession() {
@@ -383,6 +717,7 @@ export default function App() {
       getSessionStreamUrl(sessionId, {
         message,
         model: normalizeModelValue(composerModel),
+        task_id: opencodeTaskId,
       }),
     );
     eventSourceRef.current = source;
@@ -438,10 +773,12 @@ export default function App() {
       appendDraft((current) => ({ ...current, statusLabel: label }));
     });
 
-    source.addEventListener("done", () => {
+    source.addEventListener("done", (event) => {
+      const donePayload = parseDonePayload(event.data);
+      const doneSessionId = donePayload.session_id || sessionId;
       closeSource();
       appendDraft((current) => ({ ...current, status: "done", statusLabel: "Done" }));
-      void reloadSessionDetail(sessionId, true);
+      void refreshDashboard(doneSessionId).then(() => reloadSessionDetail(doneSessionId, true));
     });
 
     source.addEventListener("stream_error", (event) => {
@@ -468,6 +805,7 @@ export default function App() {
 
   function openNewSession() {
     const preferredDirectory = selectedSession?.directory || data?.directories[0]?.path || "";
+    setOpencodeTaskId("");
     setNewSessionDirectory(preferredDirectory);
     setNewSessionCustomDirectory("");
     setNewSessionMessage("");
@@ -479,11 +817,55 @@ export default function App() {
 
   function openForkSession() {
     if (!selectedSession) return;
+    setOpencodeTaskId("");
     setForkMessage("");
     setForkModel(composerModel);
     setForkError("");
     setForkDraft(null);
     setForkOpen(true);
+  }
+
+  function useTaskInComposer(task: WorkspaceTask) {
+    if (!selectedSession) {
+      setTaskError("Select a session before continuing a task.");
+      return;
+    }
+    setTaskError("");
+    setOpencodeTaskId(task.id);
+    setCommandTaskId(task.id);
+    setComposerText(buildWorkspaceTaskMessage(task));
+  }
+
+  function openNewSessionForTask(task: WorkspaceTask) {
+    setTaskError("");
+    setOpencodeTaskId(task.id);
+    setCommandTaskId(task.id);
+    setNewSessionDirectory(task.project_path || selectedProject?.path || data?.directories[0]?.path || "");
+    setNewSessionCustomDirectory("");
+    setNewSessionMessage(buildWorkspaceTaskMessage(task));
+    setNewSessionModel(composerModel);
+    setNewSessionError("");
+    setNewSessionDraft(null);
+    setNewSessionOpen(true);
+  }
+
+  function openForkSessionForTask(task: WorkspaceTask) {
+    if (!selectedSession) {
+      setTaskError("Select a session before forking a task.");
+      return;
+    }
+    setTaskError("");
+    setOpencodeTaskId(task.id);
+    setCommandTaskId(task.id);
+    setForkMessage(buildWorkspaceTaskMessage(task));
+    setForkModel(composerModel);
+    setForkError("");
+    setForkDraft(null);
+    setForkOpen(true);
+  }
+
+  function clearOpencodeTaskLink() {
+    setOpencodeTaskId("");
   }
 
   function closeNewSession() {
@@ -558,6 +940,7 @@ export default function App() {
           directory,
           message,
           model: normalizeModelValue(newSessionModel),
+          task_id: opencodeTaskId,
         },
         controller.signal,
       );
@@ -672,6 +1055,7 @@ export default function App() {
         {
           message,
           model: normalizeModelValue(forkModel),
+          task_id: opencodeTaskId,
         },
         controller.signal,
       );
@@ -935,7 +1319,9 @@ export default function App() {
             message={newSessionMessage}
             model={newSessionModel}
             modelOptions={composerModelOptions}
+            task={opencodeTask}
             onClose={closeNewSession}
+            onClearTask={clearOpencodeTaskLink}
             onCustomDirectoryChange={setNewSessionCustomDirectory}
             onDirectoryChange={(value) => {
               setNewSessionDirectory(value);
@@ -971,7 +1357,9 @@ export default function App() {
                 modelOptions={composerModelOptions}
                 selectedSession={selectedSession}
                 streamDraft={streamDraft}
+                task={opencodeTask}
                 text={composerText}
+                onClearTask={clearOpencodeTaskLink}
                 onModelChange={setComposerModel}
                 onStop={stopStream}
                 onSubmit={submitComposer}
@@ -983,6 +1371,56 @@ export default function App() {
             </section>
 
             <div className="overview-column" aria-label="Session overview">
+              <WorkspacePanel
+                project={selectedProject}
+                projects={data.projects}
+                onSelectProject={(path) => dispatch({ type: "selectDirectory", value: path })}
+                onSelectSession={(sessionId) => dispatch({ type: "selectSession", value: sessionId })}
+              />
+              <ProjectTasksPanel
+                busyId={taskBusyId}
+                draftTitle={taskDraftTitle}
+                error={taskError}
+                hasSelectedSession={Boolean(selectedSession)}
+                opencodeTaskId={opencodeTaskId}
+                project={selectedProject}
+                detailState={taskDetailState}
+                reportState={taskReportState}
+                statuses={data.taskStatuses}
+                tasks={selectedProjectTasks}
+                onDraftTitleChange={(value) => {
+                  setTaskDraftTitle(value);
+                  if (taskError) setTaskError("");
+                }}
+                onCreate={createTaskForSelectedProject}
+                onContinue={useTaskInComposer}
+                onDetail={loadProjectTaskDetail}
+                onFork={openForkSessionForTask}
+                onNewSession={openNewSessionForTask}
+                onReport={loadProjectTaskReport}
+                onStatusChange={updateProjectTaskStatus}
+              />
+              <GitSnapshotPanel state={gitState} />
+              <ValidationRunsPanel
+                busy={commandBusy}
+                confirmed={commandConfirmed}
+                commandKey={commandKey}
+                commands={data.commands}
+                error={commandError}
+                runs={selectedProjectCommandRuns}
+                streamState={commandStreamState}
+                taskId={commandTaskId}
+                tasks={selectedProjectTasks}
+                onConfirmationChange={setCommandConfirmed}
+                onCommandChange={(value) => {
+                  setCommandKey(value);
+                  setCommandConfirmed(false);
+                  if (commandError) setCommandError("");
+                }}
+                onRun={runSelectedWorkspaceCommand}
+                onTaskChange={setCommandTaskId}
+              />
+
               <section className="detail-panel">
                 <div className="panel-heading">
                   <h3>Session</h3>
@@ -1068,7 +1506,9 @@ export default function App() {
                 model={forkModel}
                 modelOptions={composerModelOptions}
                 session={selectedSession}
+                task={opencodeTask}
                 onClose={closeForkSession}
+                onClearTask={clearOpencodeTaskLink}
                 onMessageChange={(value) => {
                   setForkMessage(value);
                   if (forkError) setForkError("");
@@ -1164,6 +1604,689 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function TaskLinkNote({ task, onClear }: { task: WorkspaceTask; onClear: () => void }) {
+  return (
+    <div className="task-link-note">
+      <span>Task link: {task.title}</span>
+      <button type="button" onClick={onClear}>
+        Clear
+      </button>
+    </div>
+  );
+}
+
+function WorkspacePanel({
+  project,
+  projects,
+  onSelectProject,
+  onSelectSession,
+}: {
+  project: ProjectWorkspace | null;
+  projects: ProjectWorkspace[];
+  onSelectProject: (path: string) => void;
+  onSelectSession: (sessionId: string) => void;
+}) {
+  return (
+    <section className="detail-panel workspace-panel" aria-label="Project workspace">
+      <div className="panel-heading">
+        <h3>Workspace</h3>
+        <span>{formatNumber(projects.length)} projects</span>
+      </div>
+      {project ? (
+        <>
+          <div className="workspace-project-header">
+            <div>
+              <p className="eyebrow">Active project</p>
+              <h4>{project.name}</h4>
+              <p>{project.path}</p>
+            </div>
+            <select
+              aria-label="Switch workspace project"
+              className="workspace-project-select"
+              value={project.path}
+              onChange={(event) => onSelectProject(event.target.value)}
+            >
+              {projects.map((item) => (
+                <option key={item.path} value={item.path}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="workspace-metrics">
+            <SummaryItem label="Sessions" value={formatNumber(project.session_count)} />
+            <SummaryItem label="Messages" value={formatNumber(project.message_count)} />
+            <SummaryItem label="Input" value={formatTokens(project.tokens_input)} />
+            <SummaryItem label="Output" value={formatTokens(project.tokens_output)} />
+          </div>
+          <dl className="detail-list compact">
+            <div>
+              <dt>Updated</dt>
+              <dd>{project.last_active || "N/A"}</dd>
+            </div>
+            <div>
+              <dt>Cost</dt>
+              <dd>${project.cost.toFixed(6)}</dd>
+            </div>
+            <div>
+              <dt>Top models</dt>
+              <dd className="value-stack">
+                {project.top_models.length > 0
+                  ? project.top_models.map((model) => (
+                      <span key={model.model}>
+                        {model.model || "N/A"} · {formatNumber(model.count)}
+                      </span>
+                    ))
+                  : "N/A"}
+              </dd>
+            </div>
+          </dl>
+          <div className="workspace-recent">
+            <h4>Recent project sessions</h4>
+            {project.recent_sessions.length > 0 ? (
+              <div className="recent-session-list">
+                {project.recent_sessions.map((session) => (
+                  <button
+                    className="recent-session-row"
+                    key={session.id}
+                    type="button"
+                    onClick={() => onSelectSession(session.id)}
+                  >
+                    <span>{session.title || "Untitled session"}</span>
+                    <span>{session.time_updated}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <PanelStatus label="No project sessions" />
+            )}
+          </div>
+        </>
+      ) : (
+        <PanelStatus label="No project activity" />
+      )}
+    </section>
+  );
+}
+
+function ProjectTasksPanel({
+  busyId,
+  detailState,
+  draftTitle,
+  error,
+  hasSelectedSession,
+  opencodeTaskId,
+  project,
+  reportState,
+  statuses,
+  tasks,
+  onCreate,
+  onContinue,
+  onDetail,
+  onDraftTitleChange,
+  onFork,
+  onNewSession,
+  onReport,
+  onStatusChange,
+}: {
+  busyId: string;
+  detailState: TaskDetailState;
+  draftTitle: string;
+  error: string;
+  hasSelectedSession: boolean;
+  opencodeTaskId: string;
+  project: ProjectWorkspace | null;
+  reportState: TaskReportState;
+  statuses: WorkspaceTaskStatus[];
+  tasks: WorkspaceTask[];
+  onCreate: () => void;
+  onContinue: (task: WorkspaceTask) => void;
+  onDetail: (task: WorkspaceTask) => void;
+  onDraftTitleChange: (value: string) => void;
+  onFork: (task: WorkspaceTask) => void;
+  onNewSession: (task: WorkspaceTask) => void;
+  onReport: (task: WorkspaceTask) => void;
+  onStatusChange: (task: WorkspaceTask, status: WorkspaceTaskStatus) => void;
+}) {
+  const visibleStatuses = statuses.filter((status) => status !== "archived");
+  const counts = visibleStatuses.map((status) => ({
+    status,
+    count: tasks.filter((task) => task.status === status).length,
+  }));
+
+  return (
+    <section className="detail-panel task-panel" aria-label="Project tasks">
+      <div className="panel-heading">
+        <h3>Project Tasks</h3>
+        <span>{formatNumber(tasks.length)} tasks</span>
+      </div>
+      <form
+        className="task-create-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onCreate();
+        }}
+      >
+        <input
+          disabled={!project || busyId === "create"}
+          placeholder={project ? "Add a workspace task" : "Select a project first"}
+          value={draftTitle}
+          onChange={(event) => onDraftTitleChange(event.target.value)}
+        />
+        <button disabled={!project || busyId === "create"} type="submit">
+          {busyId === "create" ? "Adding" : "Add"}
+        </button>
+      </form>
+      {error && (
+        <p className="task-error" role="alert">
+          {error}
+        </p>
+      )}
+      {counts.length > 0 && (
+        <div className="task-status-strip" aria-label="Task status summary">
+          {counts.map((item) => (
+            <span key={item.status}>
+              {WORKSPACE_TASK_STATUS_LABELS[item.status]} · {formatNumber(item.count)}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="task-list">
+        {tasks.length > 0 ? (
+          tasks.map((task) => {
+            const isDetailBusy = detailState.status === "loading" && detailState.taskId === task.id;
+            const isReportBusy = reportState.status === "loading" && reportState.taskId === task.id;
+            const isOpenCodeTask = opencodeTaskId === task.id;
+            return (
+              <article className={`task-row ${task.status} ${isOpenCodeTask ? "opencode-linked" : ""}`} key={task.id}>
+                <div>
+                  <h4>{task.title}</h4>
+                  <p>
+                    {WORKSPACE_TASK_STATUS_LABELS[task.status]} · {task.linked_session_ids.length} linked sessions
+                  </p>
+                  {isOpenCodeTask && <p className="task-link-state">OpenCode task link active</p>}
+                </div>
+                <div className="task-row-actions">
+                  <select
+                    aria-label={`Set status for ${task.title}`}
+                    disabled={busyId === task.id}
+                    value={task.status}
+                    onChange={(event) =>
+                      onStatusChange(task, event.target.value as WorkspaceTaskStatus)
+                    }
+                  >
+                    {visibleStatuses.map((status) => (
+                      <option key={status} value={status}>
+                        {WORKSPACE_TASK_STATUS_LABELS[status]}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="task-opencode-actions" aria-label={`OpenCode actions for ${task.title}`}>
+                    <button
+                      disabled={!hasSelectedSession}
+                      type="button"
+                      onClick={() => onContinue(task)}
+                    >
+                      Continue
+                    </button>
+                    <button type="button" onClick={() => onNewSession(task)}>
+                      New
+                    </button>
+                    <button disabled={!hasSelectedSession} type="button" onClick={() => onFork(task)}>
+                      Fork
+                    </button>
+                  </div>
+                  <button
+                    aria-label={`Open detail for ${task.title}`}
+                    className="task-detail-button"
+                    disabled={isDetailBusy}
+                    type="button"
+                    onClick={() => onDetail(task)}
+                  >
+                    {isDetailBusy ? "Loading" : "Details"}
+                  </button>
+                  <button
+                    aria-label={`Build report for ${task.title}`}
+                    className="task-report-button"
+                    disabled={isReportBusy}
+                    type="button"
+                    onClick={() => onReport(task)}
+                  >
+                    {isReportBusy ? "Loading" : "Report"}
+                  </button>
+                </div>
+              </article>
+            );
+          })
+        ) : (
+          <PanelStatus label={project ? "No tasks for this project" : "No project selected"} />
+        )}
+      </div>
+      <TaskDetailPanel
+        hasSelectedSession={hasSelectedSession}
+        state={detailState}
+        onContinue={onContinue}
+        onFork={onFork}
+        onNewSession={onNewSession}
+      />
+      {reportState.status === "loading" && (
+        <div className="task-report-preview">
+          <PanelStatus label="Loading task report" />
+        </div>
+      )}
+      {reportState.status === "error" && (
+        <div className="task-report-preview">
+          <PanelStatus label={reportState.message} tone="error" />
+        </div>
+      )}
+      {reportState.status === "ready" && (
+        <div className="task-report-preview">
+          <div className="task-report-header">
+            <h4>Task Report</h4>
+            <span>
+              {formatNumber(reportState.data.command_runs.length)} runs · {formatNumber(reportState.data.events.length)} events
+            </span>
+          </div>
+          <pre>{reportState.data.markdown}</pre>
+          <TaskEventTimeline events={reportState.data.events} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function TaskDetailPanel({
+  hasSelectedSession,
+  state,
+  onContinue,
+  onFork,
+  onNewSession,
+}: {
+  hasSelectedSession: boolean;
+  state: TaskDetailState;
+  onContinue: (task: WorkspaceTask) => void;
+  onFork: (task: WorkspaceTask) => void;
+  onNewSession: (task: WorkspaceTask) => void;
+}) {
+  if (state.status === "idle") return null;
+
+  if (state.status === "loading") {
+    return (
+      <div className="task-detail-panel">
+        <PanelStatus label="Loading task detail" />
+      </div>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <div className="task-detail-panel">
+        <PanelStatus label={state.message} tone="error" />
+      </div>
+    );
+  }
+
+  const detail = state.data;
+  const { task } = detail;
+  const git = detail.git;
+
+  return (
+    <div className="task-detail-panel">
+      <div className="task-detail-header">
+        <div>
+          <h4>Task Detail</h4>
+          <p>{task.title}</p>
+        </div>
+        <span>{WORKSPACE_TASK_STATUS_LABELS[task.status]}</span>
+      </div>
+      <div className="task-detail-actions" aria-label={`OpenCode task detail actions for ${task.title}`}>
+        <button disabled={!hasSelectedSession} type="button" onClick={() => onContinue(task)}>
+          Continue
+        </button>
+        <button type="button" onClick={() => onNewSession(task)}>
+          New
+        </button>
+        <button disabled={!hasSelectedSession} type="button" onClick={() => onFork(task)}>
+          Fork
+        </button>
+      </div>
+      <dl className="detail-list compact">
+        <div>
+          <dt>Project</dt>
+          <dd>{task.project_path || "N/A"}</dd>
+        </div>
+        <div>
+          <dt>Description</dt>
+          <dd>{task.description || "No description"}</dd>
+        </div>
+        <div>
+          <dt>Updated</dt>
+          <dd>{formatCompareTime(task.updated_at) || "Unknown time"}</dd>
+        </div>
+      </dl>
+
+      <div className="task-detail-section">
+        <h4>Linked Sessions</h4>
+        {detail.linked_sessions.length > 0 ? (
+          <div className="task-detail-linked-list">
+            {detail.linked_sessions.map((session) => (
+              <article className="task-detail-linked-row" key={session.id}>
+                <strong>{session.title || "Untitled session"}</strong>
+                <span>
+                  {session.model || "N/A"} · {session.time_updated || "Unknown time"}
+                </span>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <PanelStatus label="No linked sessions" />
+        )}
+      </div>
+
+      <div className="task-detail-section">
+        <h4>Git Snapshot</h4>
+        {!git ? (
+          <PanelStatus label="Git snapshot unavailable" />
+        ) : git.is_git_repo ? (
+          <>
+            <dl className="detail-list compact task-detail-inline-list">
+              <div>
+                <dt>Branch</dt>
+                <dd>{git.branch || "detached"}</dd>
+              </div>
+              <div>
+                <dt>Dirty files</dt>
+                <dd>{formatNumber(git.dirty_count)}</dd>
+              </div>
+            </dl>
+            {git.files.length > 0 ? (
+              <div className="git-file-list task-detail-git-files">
+                {git.files.slice(0, 5).map((file) => (
+                  <div className="git-file-row" key={`${file.status}-${file.path}`}>
+                    <span>{file.status}</span>
+                    <strong>{file.path}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <PanelStatus label="Working tree clean" />
+            )}
+          </>
+        ) : (
+          <PanelStatus label={git.error || "Project is not a Git repository"} />
+        )}
+      </div>
+
+      <div className="task-detail-section">
+        <h4>Validation History</h4>
+        {detail.command_runs.length > 0 ? (
+          <div className="validation-run-list task-detail-validation-list">
+            {detail.command_runs.slice(0, 5).map((run) => (
+              <article className={`validation-run-row ${run.status}`} key={run.id}>
+                <div className="validation-run-header">
+                  <strong>{run.command_label}</strong>
+                  <span>{COMMAND_RUN_STATUS_LABELS[run.status] ?? run.status}</span>
+                </div>
+                <div className="validation-run-meta">
+                  <span>{run.exit_code === null ? "no exit code" : `exit ${run.exit_code}`}</span>
+                  <span>{formatDurationMs(run.duration_ms)}</span>
+                  <span>{formatCompareTime(run.finished_at) || "Unknown time"}</span>
+                </div>
+                {run.output.trim() && <pre>{run.output.trim()}</pre>}
+              </article>
+            ))}
+          </div>
+        ) : (
+          <PanelStatus label="No validation runs linked to this task" />
+        )}
+      </div>
+
+      <div className="task-detail-section">
+        <TaskEventTimeline events={detail.events} />
+      </div>
+    </div>
+  );
+}
+
+function TaskEventTimeline({ events }: { events: WorkspaceTaskEvent[] }) {
+  return (
+    <div className="task-event-list" aria-label="Task execution timeline">
+      <h4>Execution Timeline</h4>
+      {events.length > 0 ? (
+        events.slice(0, 8).map((event) => (
+          <article className="task-event-row" key={event.id}>
+            <div>
+              <strong>{event.title}</strong>
+              <span>{event.event_type}</span>
+            </div>
+            <p>
+              {formatCompareTime(event.created_at) || "Unknown time"}
+              {taskEventGitSummary(event)}
+            </p>
+          </article>
+        ))
+      ) : (
+        <PanelStatus label="No task events recorded" />
+      )}
+    </div>
+  );
+}
+
+function GitSnapshotPanel({ state }: { state: GitState }) {
+  return (
+    <section className="detail-panel git-panel" aria-label="Git snapshot">
+      <div className="panel-heading">
+        <h3>Git Snapshot</h3>
+        <span>{state.status === "ready" && state.data.is_git_repo ? state.data.branch : "read only"}</span>
+      </div>
+      {state.status === "idle" && <PanelStatus label="No project selected" />}
+      {state.status === "loading" && <PanelStatus label="Loading Git status" />}
+      {state.status === "error" && <PanelStatus label={state.message} tone="error" />}
+      {state.status === "ready" && !state.data.is_git_repo && (
+        <PanelStatus label={state.data.error || "Project is not a Git repository"} />
+      )}
+      {state.status === "ready" && state.data.is_git_repo && (
+        <>
+          <dl className="detail-list compact">
+            <div>
+              <dt>Branch</dt>
+              <dd>{state.data.branch || "detached"}</dd>
+            </div>
+            <div>
+              <dt>Repo root</dt>
+              <dd>{state.data.repo_root}</dd>
+            </div>
+            <div>
+              <dt>Dirty files</dt>
+              <dd>{formatNumber(state.data.dirty_count)}</dd>
+            </div>
+          </dl>
+          <div className="git-section">
+            <h4>Changed files</h4>
+            {state.data.files.length > 0 ? (
+              <div className="git-file-list">
+                {state.data.files.slice(0, 8).map((file) => (
+                  <div className="git-file-row" key={`${file.status}-${file.path}`}>
+                    <span>{file.status}</span>
+                    <strong>{file.path}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <PanelStatus label="Working tree clean" />
+            )}
+          </div>
+          <div className="git-section">
+            <h4>Recent commits</h4>
+            {state.data.recent_commits.length > 0 ? (
+              <div className="git-commit-list">
+                {state.data.recent_commits.map((commit) => (
+                  <div className="git-commit-row" key={commit.sha}>
+                    <span>{commit.sha}</span>
+                    <strong>{commit.subject}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <PanelStatus label="No commits" />
+            )}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function ValidationRunsPanel({
+  busy,
+  confirmed,
+  commandKey,
+  commands,
+  error,
+  runs,
+  streamState,
+  taskId,
+  tasks,
+  onConfirmationChange,
+  onCommandChange,
+  onRun,
+  onTaskChange,
+}: {
+  busy: boolean;
+  confirmed: boolean;
+  commandKey: string;
+  commands: WorkspaceCommand[];
+  error: string;
+  runs: WorkspaceCommandRun[];
+  streamState: ValidationStreamState;
+  taskId: string;
+  tasks: WorkspaceTask[];
+  onConfirmationChange: (value: boolean) => void;
+  onCommandChange: (value: string) => void;
+  onRun: () => void;
+  onTaskChange: (value: string) => void;
+}) {
+  const selectedCommand = commands.find((command) => command.key === commandKey) ?? null;
+  const needsConfirmation = Boolean(selectedCommand?.requires_confirmation);
+
+  return (
+    <section className="detail-panel validation-panel" aria-label="Validation runs">
+      <div className="panel-heading">
+        <h3>Validation Runs</h3>
+        <span>{formatNumber(runs.length)} recent</span>
+      </div>
+      {commands.length > 0 ? (
+        <div className="validation-controls">
+          <label>
+            <span>Command</span>
+            <select
+              aria-label="Workspace command"
+              disabled={busy}
+              value={commandKey}
+              onChange={(event) => onCommandChange(event.target.value)}
+            >
+              {commands.map((command) => (
+                <option key={command.key} value={command.key}>
+                  {command.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Task link</span>
+            <select
+              aria-label="Validation task link"
+              disabled={busy}
+              value={taskId}
+              onChange={(event) => onTaskChange(event.target.value)}
+            >
+              <option value="">No task link</option>
+              {tasks.map((task) => (
+                <option key={task.id} value={task.id}>
+                  {task.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedCommand && (
+            <div className={`validation-safety-note ${needsConfirmation ? "requires-confirmation" : ""}`}>
+              <strong>{needsConfirmation ? "Confirmation required" : "Command boundary"}</strong>
+              <p>
+                {selectedCommand.safety_note ||
+                  "Runs only the selected whitelisted argv inside the configured project directory."}
+              </p>
+              {needsConfirmation && (
+                <label className="validation-confirmation">
+                  <input
+                    checked={confirmed}
+                    disabled={busy}
+                    type="checkbox"
+                    onChange={(event) => onConfirmationChange(event.target.checked)}
+                  />
+                  <span>I understand this command may have side effects.</span>
+                </label>
+              )}
+            </div>
+          )}
+          <button disabled={busy || !commandKey || (needsConfirmation && !confirmed)} type="button" onClick={onRun}>
+            {busy ? "Running" : "Run"}
+          </button>
+        </div>
+      ) : (
+        <PanelStatus label="No command presets configured" />
+      )}
+      {error && (
+        <p className="validation-error" role="alert">
+          {error}
+        </p>
+      )}
+      {streamState.status !== "idle" && (
+        <article className={`validation-live-run ${streamState.status}`} aria-live="polite">
+          <div className="validation-run-header">
+            <strong>{streamState.commandLabel}</strong>
+            <span>
+              {streamState.status === "running"
+                ? "Running"
+                : streamState.status === "done"
+                  ? COMMAND_RUN_STATUS_LABELS[streamState.run.status] ?? streamState.run.status
+                  : "Error"}
+            </span>
+          </div>
+          {streamState.status === "done" && (
+            <div className="validation-run-meta">
+              <span>{streamState.run.exit_code === null ? "no exit code" : `exit ${streamState.run.exit_code}`}</span>
+              <span>{formatDurationMs(streamState.run.duration_ms)}</span>
+              {streamState.run.task_id && <span>linked task</span>}
+            </div>
+          )}
+          {streamState.status === "error" && <p>{streamState.message}</p>}
+          <pre>{streamState.output.trim() || "(waiting for output)"}</pre>
+        </article>
+      )}
+      <div className="validation-run-list">
+        {runs.length > 0 ? (
+          runs.slice(0, 5).map((run) => (
+            <article className={`validation-run-row ${run.status}`} key={run.id}>
+              <div className="validation-run-header">
+                <strong>{run.command_label}</strong>
+                <span>{COMMAND_RUN_STATUS_LABELS[run.status] ?? run.status}</span>
+              </div>
+              <div className="validation-run-meta">
+                <span>{run.exit_code === null ? "no exit code" : `exit ${run.exit_code}`}</span>
+                <span>{formatDurationMs(run.duration_ms)}</span>
+                {run.task_id && <span>linked task</span>}
+              </div>
+              {run.output && <pre>{run.output.trim() || "(empty output)"}</pre>}
+            </article>
+          ))
+        ) : (
+          <PanelStatus label="No validation runs yet" />
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -1464,7 +2587,9 @@ function SessionComposer({
   modelOptions,
   selectedSession,
   streamDraft,
+  task,
   text,
+  onClearTask,
   onModelChange,
   onStop,
   onSubmit,
@@ -1476,7 +2601,9 @@ function SessionComposer({
   modelOptions: string[];
   selectedSession: SessionSummary | null;
   streamDraft: StreamDraft | null;
+  task: WorkspaceTask | null;
   text: string;
+  onClearTask: () => void;
   onModelChange: (value: string) => void;
   onStop: () => void;
   onSubmit: () => void;
@@ -1513,6 +2640,7 @@ function SessionComposer({
           {streamDraft?.statusLabel ?? (selectedSession ? "Ready" : "No session")}
         </span>
       </div>
+      {task && <TaskLinkNote task={task} onClear={onClearTask} />}
       <textarea
         disabled={disabled || isStreaming}
         placeholder="Continue this session"
@@ -1553,7 +2681,9 @@ function ForkSessionPanel({
   model,
   modelOptions,
   session,
+  task,
   onClose,
+  onClearTask,
   onMessageChange,
   onModelChange,
   onStop,
@@ -1565,7 +2695,9 @@ function ForkSessionPanel({
   model: string;
   modelOptions: string[];
   session: SessionSummary;
+  task: WorkspaceTask | null;
   onClose: () => void;
+  onClearTask: () => void;
   onMessageChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onStop: () => void;
@@ -1585,6 +2717,7 @@ function ForkSessionPanel({
         </button>
       </div>
       <div className="fork-session-form">
+        {task && <TaskLinkNote task={task} onClear={onClearTask} />}
         <label className="filter-field">
           <span>Model</span>
           <select
@@ -1649,7 +2782,9 @@ function NewSessionPanel({
   message,
   model,
   modelOptions,
+  task,
   onClose,
+  onClearTask,
   onCustomDirectoryChange,
   onDirectoryChange,
   onMessageChange,
@@ -1665,7 +2800,9 @@ function NewSessionPanel({
   message: string;
   model: string;
   modelOptions: string[];
+  task: WorkspaceTask | null;
   onClose: () => void;
+  onClearTask: () => void;
   onCustomDirectoryChange: (value: string) => void;
   onDirectoryChange: (value: string) => void;
   onMessageChange: (value: string) => void;
@@ -1684,6 +2821,7 @@ function NewSessionPanel({
         </button>
       </div>
       <div className="new-session-form">
+        {task && <TaskLinkNote task={task} onClear={onClearTask} />}
         <label className="filter-field">
           <span>Directory</span>
           <select
@@ -2179,6 +3317,37 @@ function formatCompareTime(ms: number) {
   return date.toLocaleString();
 }
 
+function buildWorkspaceTaskMessage(task: WorkspaceTask) {
+  const lines = [
+    `Workspace task: ${task.title}`,
+    "",
+    `Project: ${task.project_path || "N/A"}`,
+  ];
+  if (task.description) {
+    lines.push("", task.description);
+  }
+  lines.push("", "Work on this task, keep the change focused, and summarize validation steps.");
+  return lines.join("\n");
+}
+
+function taskEventGitSummary(event: WorkspaceTaskEvent) {
+  const git = objectValue(event.payload.git);
+  if (!git) return "";
+  if (git.is_git_repo === true) {
+    const branch = stringValue(git.branch) || "detached";
+    const dirtyCount = numberValue(git.dirty_count) ?? 0;
+    return ` · ${branch}, ${dirtyCount} dirty files`;
+  }
+  if (typeof git.error === "string" && git.error) return ` · ${git.error}`;
+  return "";
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 function applyStreamEvent(
   setDraft: React.Dispatch<React.SetStateAction<StreamDraft | null>>,
   sessionId: string,
@@ -2293,6 +3462,16 @@ function parseDonePayload(data: string): { session_id?: string } {
     return JSON.parse(data || "{}") as { session_id?: string };
   } catch (_) {
     return {};
+  }
+}
+
+function parseCommandRunDonePayload(data: string): WorkspaceCommandRun | null {
+  try {
+    const payload = JSON.parse(data || "{}") as { run?: unknown };
+    const run = objectValue(payload.run);
+    return run ? (run as unknown as WorkspaceCommandRun) : null;
+  } catch (_) {
+    return null;
   }
 }
 

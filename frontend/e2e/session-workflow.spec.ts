@@ -17,6 +17,39 @@ test("browses, searches, opens a session, and keeps composer reachable", async (
     "Choose two sessions and compare",
   );
   await expect(page.locator(".compare-panel .panel-status")).toHaveAttribute("role", "status");
+  await expect(page.locator(".workspace-panel")).toContainText("Workspace");
+  await expect(page.locator(".workspace-panel")).toContainText("Active project");
+  await expect(page.locator(".task-panel")).toContainText("Project Tasks");
+  await expect(page.locator(".git-panel")).toContainText("Git Snapshot");
+
+  if (!isMobile) {
+    await page.locator(".task-create-form input").fill("Prepare workspace task");
+    await page.locator(".task-create-form button").click();
+    await expect(page.locator(".task-row")).toContainText("Prepare workspace task");
+    const createdTask = page.locator(".task-row").filter({ hasText: "Prepare workspace task" }).first();
+    await createdTask.getByRole("button", { name: "Continue" }).click();
+    await expect(page.locator(".composer-panel")).toContainText("Task link: Prepare workspace task");
+    await expect(page.locator(".composer-panel textarea")).toHaveValue(/Workspace task: Prepare workspace task/);
+    await createdTask.locator("select").selectOption("done");
+    await expect(page.locator(".task-row")).toContainText("Done");
+    await page.locator(".validation-controls button").click();
+    await expect(page.locator(".validation-live-run")).toContainText("workspace validation ok");
+    await expect(page.locator(".validation-live-run")).toContainText("Passed");
+    await createdTask.getByRole("button", { name: /detail/i }).click();
+    await expect(page.locator(".task-detail-panel")).toContainText("Task Detail");
+    await expect(page.locator(".task-detail-panel")).toContainText("Prepare workspace task");
+    await expect(page.locator(".task-detail-panel")).toContainText("Alpha release planning");
+    await expect(page.locator(".task-detail-panel")).toContainText("workspace validation ok");
+    await expect(page.locator(".task-detail-panel")).toContainText("Validation Quick Check success");
+    await expect(page.locator(".task-detail-actions")).toContainText("Continue");
+    await page.locator(".task-report-button").first().click();
+    await expect(page.locator(".task-report-preview")).toContainText("Prepare workspace task");
+    await expect(page.locator(".task-report-preview")).toContainText("workspace validation ok");
+    await expect(page.locator(".task-report-preview")).toContainText("PR Description Draft");
+    await expect(page.locator(".task-report-preview .task-event-list")).toContainText(
+      "Validation Quick Check success",
+    );
+  }
 
   await search.fill("__missing_session__");
   await expect(page.locator(".session-list .status-block")).toHaveText("No sessions");
@@ -35,6 +68,7 @@ test("browses, searches, opens a session, and keeps composer reachable", async (
   }
 
   await expect(page.getByRole("heading", { name: "Messages" })).toBeVisible();
+  await page.locator(".timeline-panel").scrollIntoViewIfNeeded();
   await expect(page.locator(".timeline-panel")).toBeInViewport();
   await expect(page.locator(".composer-panel")).toBeInViewport();
   await expect(page.locator(".tool-card")).toContainText("bash");

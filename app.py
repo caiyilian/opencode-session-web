@@ -20,18 +20,42 @@ from db import (
 from logging_config import configure_logging
 from repositories.session_queries import (
     fetch_message_detail,
+    fetch_project_workspaces,
     fetch_session_detail,
     fetch_session_list,
     fetch_session_messages_with_parts,
     fetch_stats_overview,
     fetch_token_stats,
 )
+from repositories.workspace_tasks import (
+    TASK_STATUSES,
+    connect_workspace_db,
+    create_task,
+    fetch_command_runs,
+    fetch_task_events,
+    fetch_tasks,
+    get_task,
+    record_task_event,
+    record_command_run,
+    update_task,
+)
 from services import sse
+from services.git_status import read_git_snapshot
 from services.opencode_errors import format_stream_error_message, is_known_error_text
 from services.opencode_events import parse_part
 from services.opencode_runner import event_to_sse
 from services.process_manager import ProcessManager
 from services.sync_watcher import diff_session_snapshots, fetch_session_snapshots
+from services.workspace_commands import (
+    CommandExecution,
+    find_workspace_command,
+    parse_workspace_commands,
+    require_workspace_command_confirmation,
+    resolve_workspace_command_cwd,
+    run_workspace_command,
+    truncate_command_output,
+)
+from services.workspace_reports import build_task_report
 
 app = Flask(__name__)
 logger = configure_logging()
@@ -63,6 +87,11 @@ def create_app(test_config=None):
 def get_db():
     """获取数据库连接（每次请求独立，避免线程问题）"""
     return connect_db(app.config.get("OPENCODE_DB_PATH", DB_PATH))
+
+
+def get_workspace_db():
+    """Connect to the OpenCode Session Web workspace database."""
+    return connect_workspace_db(app.config["OPENCODE_WORKSPACE_DB_PATH"])
 
 
 # ── 工具函数 ──────────────────────────────────────────────
@@ -503,6 +532,526 @@ def api_directories():
     return jsonify({"directories": dirs})
 
 
+@app.route("/api/workspace/projects")
+def api_workspace_projects():
+    """Return project-level workspace summaries."""
+    limit = _bounded_int_arg("limit", 50, minimum=1, maximum=200)
+    conn = get_db()
+    projects = fetch_project_workspaces(conn, limit=limit)
+    conn.close()
+
+    return jsonify({
+        "projects": [
+            {
+                "path": item["row"]["directory"],
+                "name": get_project_name(item["row"]["directory"]),
+                "session_count": item["row"]["session_count"] or 0,
+                "message_count": item["row"]["message_count"] or 0,
+                "first_active_raw": item["row"]["first_active"] or 0,
+                "last_active_raw": item["row"]["last_active"] or 0,
+                "last_active": format_time(item["row"]["last_active"]),
+                "cost": round(item["row"]["cost"] or 0, 6),
+                "tokens_input": item["row"]["tokens_input"] or 0,
+                "tokens_output": item["row"]["tokens_output"] or 0,
+                "top_models": [
+                    {
+                        "model": format_model(model_row["model"]),
+                        "count": model_row["count"] or 0,
+                    }
+                    for model_row in item["top_models"]
+                ],
+                "recent_sessions": [
+                    {
+                        "id": session_row["id"],
+                        "title": session_row["title"],
+                        "model": format_model(session_row["model"]),
+                        "time_updated": format_time(session_row["time_updated"]),
+                        "time_updated_raw": session_row["time_updated"] or 0,
+                    }
+                    for session_row in item["recent_sessions"]
+                ],
+            }
+            for item in projects
+        ],
+        "total": len(projects),
+    })
+
+
+@app.route("/api/workspace/tasks", methods=["GET"])
+def api_workspace_tasks():
+    project_path = request.args.get("project_path", "").strip()
+    status = request.args.get("status", "").strip()
+    conn = get_workspace_db()
+    try:
+        tasks = fetch_tasks(conn, project_path=project_path, status=status)
+    except ValueError as exc:
+        conn.close()
+        return jsonify({"error": str(exc)}), 400
+    conn.close()
+
+    return jsonify({
+        "tasks": tasks,
+        "statuses": sorted(TASK_STATUSES),
+        "total": len(tasks),
+    })
+
+
+@app.route("/api/workspace/tasks", methods=["POST"])
+def api_workspace_task_create():
+    payload = request.get_json(silent=True) or {}
+    conn = get_workspace_db()
+    try:
+        task = create_task(
+            conn,
+            title=payload.get("title", ""),
+            description=payload.get("description", ""),
+            project_path=payload.get("project_path", ""),
+            status=payload.get("status", "todo"),
+            linked_session_ids=payload.get("linked_session_ids"),
+        )
+    except ValueError as exc:
+        conn.close()
+        return jsonify({"error": str(exc)}), 400
+    conn.close()
+    return jsonify({"task": task}), 201
+
+
+@app.route("/api/workspace/tasks/<task_id>", methods=["PATCH"])
+def api_workspace_task_update(task_id):
+    payload = request.get_json(silent=True) or {}
+    conn = get_workspace_db()
+    try:
+        task = update_task(conn, task_id, payload)
+    except ValueError as exc:
+        conn.close()
+        return jsonify({"error": str(exc)}), 400
+    conn.close()
+    if not task:
+        return jsonify({"error": "任务不存在"}), 404
+    return jsonify({"task": task})
+
+
+@app.route("/api/workspace/tasks/<task_id>/detail", methods=["GET"])
+def api_workspace_task_detail(task_id):
+    command_limit = _bounded_int_arg("command_limit", 20, minimum=1, maximum=100)
+    event_limit = _bounded_int_arg("event_limit", 50, minimum=1, maximum=100)
+    detail = _read_workspace_task_detail(
+        task_id,
+        command_limit=command_limit,
+        event_limit=event_limit,
+    )
+    if not detail:
+        return jsonify({"error": "任务不存在"}), 404
+    return jsonify({"detail": detail})
+
+
+@app.route("/api/workspace/tasks/<task_id>/report", methods=["GET"])
+def api_workspace_task_report(task_id):
+    workspace_conn = get_workspace_db()
+    task = get_task(workspace_conn, task_id)
+    if not task:
+        workspace_conn.close()
+        return jsonify({"error": "任务不存在"}), 404
+    command_runs = fetch_command_runs(workspace_conn, task_id=task_id, limit=10)
+    linked_sessions = _fetch_linked_sessions(task["linked_session_ids"])
+    git_snapshot = _read_task_git_snapshot(task)
+    record_task_event(
+        workspace_conn,
+        task_id=task_id,
+        event_type="task_report_generated",
+        title="Task report generated",
+        payload={"git": git_snapshot},
+    )
+    task_events = fetch_task_events(workspace_conn, task_id, limit=25)
+    workspace_conn.close()
+
+    markdown = build_task_report(
+        task=task,
+        linked_sessions=linked_sessions,
+        command_runs=command_runs,
+        git_snapshot=git_snapshot,
+        task_events=task_events,
+    )
+    return jsonify({
+        "report": {
+            "task": task,
+            "linked_sessions": linked_sessions,
+            "command_runs": command_runs,
+            "events": task_events,
+            "git": git_snapshot,
+            "markdown": markdown,
+        }
+    })
+
+
+@app.route("/api/workspace/tasks/<task_id>/events", methods=["GET"])
+def api_workspace_task_events(task_id):
+    limit = _bounded_int_arg("limit", 50, minimum=1, maximum=100)
+    conn = get_workspace_db()
+    task = get_task(conn, task_id)
+    if not task:
+        conn.close()
+        return jsonify({"error": "任务不存在"}), 404
+    events = fetch_task_events(conn, task_id, limit=limit)
+    conn.close()
+    return jsonify({"events": events, "total": len(events)})
+
+
+def _read_workspace_task_detail(task_id, *, command_limit=20, event_limit=50):
+    workspace_conn = get_workspace_db()
+    try:
+        task = get_task(workspace_conn, task_id)
+        if not task:
+            return None
+        command_runs = fetch_command_runs(workspace_conn, task_id=task_id, limit=command_limit)
+        task_events = fetch_task_events(workspace_conn, task_id, limit=event_limit)
+    finally:
+        workspace_conn.close()
+
+    return {
+        "task": task,
+        "linked_sessions": _fetch_linked_sessions(task["linked_session_ids"]),
+        "command_runs": command_runs,
+        "events": task_events,
+        "git": _read_task_git_snapshot(task),
+    }
+
+
+def _fetch_linked_sessions(session_ids):
+    if not session_ids:
+        return []
+    placeholders = ",".join("?" for _ in session_ids)
+    conn = get_db()
+    model_expr = "model" if has_table_column(conn, "session", "model") else "NULL"
+    rows = conn.execute(
+        f"""SELECT id, title, directory, {model_expr} AS model, time_updated
+            FROM session
+            WHERE id IN ({placeholders})""",
+        session_ids,
+    ).fetchall()
+    conn.close()
+    by_id = {row["id"]: row for row in rows}
+    return [
+        {
+            "id": session_id,
+            "title": by_id[session_id]["title"] if session_id in by_id else "",
+            "directory": by_id[session_id]["directory"] if session_id in by_id else "",
+            "model": format_model(by_id[session_id]["model"]) if session_id in by_id else "",
+            "time_updated": format_time(by_id[session_id]["time_updated"]) if session_id in by_id else "",
+            "time_updated_raw": by_id[session_id]["time_updated"] if session_id in by_id else 0,
+        }
+        for session_id in session_ids
+    ]
+
+
+def _workspace_task_exists(task_id):
+    if not task_id:
+        return True
+    conn = get_workspace_db()
+    try:
+        return get_task(conn, task_id) is not None
+    finally:
+        conn.close()
+
+
+def _read_task_git_snapshot(task):
+    if not task or not task.get("project_path"):
+        return None
+    try:
+        return read_git_snapshot(task["project_path"]).to_dict()
+    except Exception as exc:
+        return {"is_git_repo": False, "error": str(exc)}
+
+
+def _link_workspace_task_session(task_id, session_id, source="opencode"):
+    if not task_id or not session_id:
+        return False
+    conn = get_workspace_db()
+    try:
+        task = get_task(conn, task_id)
+        if not task:
+            return False
+        linked_ids = list(task["linked_session_ids"])
+        if session_id not in linked_ids:
+            linked_ids.append(session_id)
+            update_task(conn, task_id, {"linked_session_ids": linked_ids})
+        source_labels = {
+            "continue": "OpenCode continue completed",
+            "new": "OpenCode new session completed",
+            "fork": "OpenCode fork completed",
+        }
+        record_task_event(
+            conn,
+            task_id=task_id,
+            event_type="opencode_session_linked",
+            title=source_labels.get(source, "OpenCode session linked"),
+            payload={
+                "session_id": session_id,
+                "source": source,
+                "git": _read_task_git_snapshot(task),
+            },
+        )
+        return True
+    finally:
+        conn.close()
+
+
+@app.route("/api/workspace/git")
+def api_workspace_git():
+    project_path = request.args.get("project_path", "").strip()
+    if not project_path:
+        return jsonify({"error": "project_path 参数不能为空"}), 400
+    try:
+        snapshot = read_git_snapshot(project_path)
+    except FileNotFoundError as exc:
+        if str(exc) == "项目目录不存在":
+            return jsonify({"error": str(exc)}), 404
+        return jsonify({"error": "git CLI 未找到"}), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "读取 Git 状态超时"}), 504
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"git": snapshot.to_dict()})
+
+
+@app.route("/api/workspace/commands")
+def api_workspace_commands():
+    try:
+        commands = parse_workspace_commands(app.config.get("OPENCODE_WORKSPACE_COMMANDS", []))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"commands": [command.to_public_dict() for command in commands]})
+
+
+@app.route("/api/workspace/command-runs", methods=["GET"])
+def api_workspace_command_runs():
+    project_path = request.args.get("project_path", "").strip()
+    task_id = request.args.get("task_id", "").strip()
+    limit = _bounded_int_arg("limit", 20, minimum=1, maximum=100)
+    conn = get_workspace_db()
+    runs = fetch_command_runs(conn, project_path=project_path, task_id=task_id, limit=limit)
+    conn.close()
+    return jsonify({"runs": runs, "total": len(runs)})
+
+
+@app.route("/api/workspace/command-runs", methods=["POST"])
+def api_workspace_command_run_create():
+    payload = request.get_json(silent=True) or {}
+    project_path = str(payload.get("project_path") or "").strip()
+    command_key = str(payload.get("command_key") or "").strip()
+    task_id = str(payload.get("task_id") or "").strip()
+    if not project_path:
+        return jsonify({"error": "project_path 参数不能为空"}), 400
+    if not command_key:
+        return jsonify({"error": "command_key 参数不能为空"}), 400
+
+    try:
+        commands = parse_workspace_commands(app.config.get("OPENCODE_WORKSPACE_COMMANDS", []))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    command = find_workspace_command(commands, command_key)
+    if not command:
+        return jsonify({"error": "命令不在白名单中"}), 400
+    try:
+        require_workspace_command_confirmation(command, payload.get("confirmed") is True)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    try:
+        result = run_workspace_command(
+            command,
+            project_path=project_path,
+            process_manager=process_manager,
+            timeout=int(app.config.get("OPENCODE_WORKSPACE_COMMAND_TIMEOUT", 120)),
+        )
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    run = _record_workspace_command_execution(
+        project_path=project_path,
+        task_id=task_id,
+        command=command,
+        result=result,
+    )
+    status_code = 201 if result.status == "success" else 200
+    return jsonify({"run": run}), status_code
+
+
+@app.route("/api/workspace/command-runs/stream", methods=["POST"])
+def api_workspace_command_run_stream():
+    payload = request.get_json(silent=True) or {}
+    project_path = str(payload.get("project_path") or "").strip()
+    command_key = str(payload.get("command_key") or "").strip()
+    task_id = str(payload.get("task_id") or "").strip()
+    if not project_path:
+        return jsonify({"error": "project_path 参数不能为空"}), 400
+    if not command_key:
+        return jsonify({"error": "command_key 参数不能为空"}), 400
+
+    try:
+        commands = parse_workspace_commands(app.config.get("OPENCODE_WORKSPACE_COMMANDS", []))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    command = find_workspace_command(commands, command_key)
+    if not command:
+        return jsonify({"error": "命令不在白名单中"}), 400
+    try:
+        require_workspace_command_confirmation(command, payload.get("confirmed") is True)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    try:
+        project_root = os.path.abspath(os.path.expanduser(project_path))
+        if not os.path.isdir(project_root):
+            return jsonify({"error": "项目目录不存在"}), 404
+        command_cwd = resolve_workspace_command_cwd(project_root, command.cwd)
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    timeout = int(app.config.get("OPENCODE_WORKSPACE_COMMAND_TIMEOUT", 120))
+
+    def generate():
+        started_at = int(time.time() * 1000)
+        start = time.monotonic()
+        proc = None
+        output_parts = []
+        stdout_thread = None
+        output_queue = queue.Queue()
+
+        try:
+            yield sse.json_event(
+                "started",
+                {
+                    "command_key": command.key,
+                    "command_label": command.label,
+                    "cwd": command_cwd,
+                    "started_at": started_at,
+                },
+            )
+            proc = process_manager.start(
+                command.argv,
+                cwd=command_cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                stdin=subprocess.DEVNULL,
+            )
+
+            def read_output():
+                for line in proc.stdout:
+                    output_queue.put(line)
+                output_queue.put(None)
+
+            stdout_thread = threading.Thread(target=read_output, daemon=True)
+            stdout_thread.start()
+            timed_out = False
+            while True:
+                try:
+                    line = output_queue.get(timeout=1)
+                except queue.Empty:
+                    if time.monotonic() - start > timeout:
+                        timed_out = True
+                        process_manager.terminate(proc, timeout=2)
+                        break
+                    yield sse.status("running")
+                    continue
+                if line is None:
+                    break
+                output_parts.append(line)
+                yield sse.event("output", line.rstrip("\n"))
+
+            exit_code = None
+            if timed_out:
+                status = "timeout"
+            else:
+                proc.wait(timeout=timeout)
+                exit_code = proc.returncode
+                status = "success" if exit_code == 0 else "failed"
+            finished_at = int(time.time() * 1000)
+            result = CommandExecution(
+                status=status,
+                exit_code=exit_code,
+                output=truncate_command_output("".join(output_parts), 20000),
+                duration_ms=int((time.monotonic() - start) * 1000),
+                started_at=started_at,
+                finished_at=finished_at,
+                cwd=command_cwd,
+            )
+            run = _record_workspace_command_execution(
+                project_path=project_path,
+                task_id=task_id,
+                command=command,
+                result=result,
+            )
+            yield sse.done({"run": run})
+        except FileNotFoundError as exc:
+            yield sse.stream_error(str(exc))
+        except Exception as exc:
+            yield sse.stream_error(str(exc))
+        finally:
+            if proc:
+                process_manager.unregister(proc)
+            if stdout_thread:
+                stdout_thread.join(timeout=2)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Connection": "keep-alive", "Cache-Control": "no-cache"},
+    )
+
+
+def _record_workspace_command_execution(*, project_path, task_id, command, result):
+    conn = get_workspace_db()
+    try:
+        run = record_command_run(
+            conn,
+            project_path=project_path,
+            task_id=task_id,
+            command_key=command.key,
+            command_label=command.label,
+            command_argv=command.argv,
+            cwd=result.cwd,
+            status=result.status,
+            exit_code=result.exit_code,
+            duration_ms=result.duration_ms,
+            output=result.output,
+            started_at=result.started_at,
+            finished_at=result.finished_at,
+        )
+        if task_id:
+            task = get_task(conn, task_id)
+            if task:
+                record_task_event(
+                    conn,
+                    task_id=task_id,
+                    event_type="validation_run_completed",
+                    title=f"Validation {command.label} {result.status}",
+                    payload={
+                        "run_id": run["id"],
+                        "command_key": command.key,
+                        "command_label": command.label,
+                        "status": result.status,
+                        "exit_code": result.exit_code,
+                        "duration_ms": result.duration_ms,
+                        "git": _read_task_git_snapshot(task),
+                    },
+                )
+        return run
+    finally:
+        conn.close()
+
+
 @app.route("/api/models")
 def api_models():
     """获取所有用过的模型"""
@@ -729,6 +1278,9 @@ def api_session_stream(session_id):
         return jsonify({"error": "消息不能为空"}), 400
 
     model = request.args.get("model", "").strip()
+    task_id = request.args.get("task_id", "").strip()
+    if task_id and not _workspace_task_exists(task_id):
+        return jsonify({"error": "任务不存在"}), 404
 
     # 从 DB 读取会话信息，获取工作目录
     conn = get_db()
@@ -764,7 +1316,8 @@ def api_session_stream(session_id):
             yield sse.stream_error(str(e))
         finally:
             if not had_error:
-                yield sse.done({"session_id": session_id})
+                _link_workspace_task_session(task_id, session_id, source="continue")
+                yield sse.done({"session_id": session_id, "task_id": task_id})
 
     return Response(
         stream_with_context(generate()),
@@ -791,11 +1344,14 @@ def api_session_new():
     directory = (data.get("directory") or "").strip()
     message = (data.get("message") or "").strip()
     model = (data.get("model") or "").strip()
+    task_id = (data.get("task_id") or "").strip()
 
     if not message:
         return jsonify({"error": "消息不能为空"}), 400
     if not directory or not os.path.isdir(directory):
         return jsonify({"error": "无效的工作目录"}), 400
+    if task_id and not _workspace_task_exists(task_id):
+        return jsonify({"error": "任务不存在"}), 404
 
     def generate():
         new_session_id = None
@@ -938,7 +1494,9 @@ def api_session_new():
             if stderr_thread2:
                 stderr_thread2.join(timeout=2)
             if not had_error:
-                yield sse.done({"session_id": new_session_id or ""})
+                if new_session_id:
+                    _link_workspace_task_session(task_id, new_session_id, source="new")
+                yield sse.done({"session_id": new_session_id or "", "task_id": task_id})
 
     return Response(
         stream_with_context(generate()),
@@ -1086,9 +1644,12 @@ def api_session_fork(session_id):
     data = request.get_json(silent=True) or {}
     message = (data.get("message") or "").strip()
     model = (data.get("model") or "").strip()
+    task_id = (data.get("task_id") or "").strip()
 
     if not message:
         return jsonify({"error": "消息不能为空"}), 400
+    if task_id and not _workspace_task_exists(task_id):
+        return jsonify({"error": "任务不存在"}), 404
 
     # 读取原会话的工作目录
     conn = get_db()
@@ -1100,6 +1661,7 @@ def api_session_fork(session_id):
 
     def generate():
         new_session_id = None
+        had_error = False
         proc = None
         stderr_thread = None
         stdout_thread3 = None
@@ -1157,10 +1719,12 @@ def api_session_fork(session_id):
                         if is_known_error_text(combined) or not has_output:
                             terminate_fork_process()
                             err_text = "\n".join(recent_stderr[-5:])
+                            had_error = True
                             yield sse.stream_error(safe_truncate(format_stream_error_message(err_text)))
                             return
                     if has_output and (time.time() - last_output_time > 120):
                         terminate_fork_process()
+                        had_error = True
                         yield sse.stream_error("请求超时（120 秒无输出）")
                         return
                     continue
@@ -1180,6 +1744,7 @@ def api_session_fork(session_id):
                         if "stream_error" in sse_event:
                             logger.warning("fork-session stream error detected: %s", line[:200])
                             terminate_fork_process()
+                            had_error = True
                             yield sse_event
                             return
                         yield sse_event
@@ -1190,6 +1755,7 @@ def api_session_fork(session_id):
                     if non_json and len(non_json) > 5:
                         if is_known_error_text(non_json):
                             terminate_fork_process()
+                            had_error = True
                             yield sse.stream_error(safe_truncate(format_stream_error_message(non_json)))
                             return
 
@@ -1199,16 +1765,20 @@ def api_session_fork(session_id):
                 recent_stderr = list(stderr_lines[-10:])
             if recent_stderr:
                 err_text = "\n".join(recent_stderr)
+                had_error = True
                 yield sse.stream_error(safe_truncate(format_stream_error_message(err_text)))
             stderr_thread.join(timeout=2)
 
         except FileNotFoundError:
+            had_error = True
             yield sse.stream_error("opencode CLI 未找到")
         except subprocess.TimeoutExpired:
+            had_error = True
             if proc:
                 process_manager.terminate(proc, timeout=2)
             yield sse.stream_error("请求超时")
         except Exception as e:
+            had_error = True
             yield sse.stream_error(str(e))
         finally:
             if proc:
@@ -1217,7 +1787,10 @@ def api_session_fork(session_id):
                 stdout_thread3.join(timeout=2)
             if stderr_thread:
                 stderr_thread.join(timeout=2)
-            yield sse.done({"session_id": new_session_id or ""})
+            if not had_error:
+                if new_session_id:
+                    _link_workspace_task_session(task_id, new_session_id, source="fork")
+                yield sse.done({"session_id": new_session_id or "", "task_id": task_id})
 
     return Response(
         stream_with_context(generate()),
